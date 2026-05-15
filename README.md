@@ -65,6 +65,59 @@ My project root is /my-project. I just changed these files from git diff:
 1. get_affected_tests — which tests do I need to run?
 2. get_dependency_graph for src/utils/auth.ts — what else depends on it?
 3. explain_impact — why does tests/login.spec.ts care about auth.ts?
+4. get_coverage_gaps — which source files have zero test coverage?
+5. get_test_summary — what's the overall health of our test suite?
+```
+
+## 📊 Example output
+
+Given a project with this structure:
+
+```
+src/
+  fixtures/base-fixture.ts   ← imports home-page + results-page
+  pages/google-home-page.ts
+  pages/google-results-page.ts
+tests/
+  google-pom.spec.ts         ← imports base-fixture
+```
+
+**`get_affected_tests`** — change `google-home-page.ts`, find affected tests:
+
+```json
+{
+  "changed_files": ["/my-project/src/pages/google-home-page.ts"],
+  "affected_tests": ["/my-project/tests/google-pom.spec.ts"],
+  "total_affected": 1
+}
+```
+
+**`explain_impact`** — why does the spec depend on `google-home-page.ts`?
+
+```json
+{
+  "changed_file": "/my-project/src/pages/google-home-page.ts",
+  "test_file": "/my-project/tests/google-pom.spec.ts",
+  "found": true,
+  "import_chain": [
+    "/my-project/tests/google-pom.spec.ts",
+    "/my-project/src/fixtures/base-fixture.ts",
+    "/my-project/src/pages/google-home-page.ts"
+  ]
+}
+```
+
+**`get_test_summary`** — project-wide health:
+
+```json
+{
+  "total_source_files": 4,
+  "total_test_files": 1,
+  "covered_source_files": 3,
+  "coverage_rate": 0.75,
+  "most_imported_files": [{ "file": "src/fixtures/base-fixture.ts", "imported_by_count": 1 }],
+  "deepest_import_chains": [{ "test": "tests/google-pom.spec.ts", "depth": 2 }]
+}
 ```
 
 ## 🧠 How it works
