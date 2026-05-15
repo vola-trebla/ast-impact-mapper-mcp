@@ -115,10 +115,11 @@ export function getDependencyGraph(projectRoot: string, filePath: string): FileD
   const forwardGraph = buildForwardGraph(project);
   const reverseGraph = buildReverseGraph(project);
 
+  const filterExternal = (f: string) => !f.includes("/node_modules/");
   return {
     file: normalized,
-    imports: [...(forwardGraph.get(normalized) ?? [])],
-    imported_by: [...(reverseGraph.get(normalized) ?? [])],
+    imports: [...(forwardGraph.get(normalized) ?? [])].filter(filterExternal),
+    imported_by: [...(reverseGraph.get(normalized) ?? [])].filter(filterExternal),
   };
 }
 
