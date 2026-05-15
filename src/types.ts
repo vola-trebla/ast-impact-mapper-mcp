@@ -16,3 +16,19 @@ export interface ImpactExplanation {
   found: boolean;
   import_chain: string[];
 }
+
+export interface CoverageGaps {
+  uncovered_files: string[];
+  total_source_files: number;
+  total_uncovered: number;
+  coverage_rate: number;
+}
+
+export interface TestSummary {
+  total_source_files: number;
+  total_test_files: number;
+  covered_source_files: number;
+  coverage_rate: number;
+  most_imported_files: { file: string; imported_by_count: number }[];
+  deepest_import_chains: { test: string; depth: number }[];
+}
