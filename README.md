@@ -10,11 +10,14 @@ This server builds a precise dependency graph from your TypeScript project and a
 
 ## 🛠️ Tools
 
-| Tool                   | Arguments                                    | What it returns                                                             |
-| ---------------------- | -------------------------------------------- | --------------------------------------------------------------------------- |
-| `get_affected_tests`   | `project_root`, `changed_files[]`            | Test files that transitively import any of the changed files                |
-| `get_dependency_graph` | `project_root`, `file_path`                  | Direct imports and importers for a specific file                            |
-| `explain_impact`       | `project_root`, `changed_file`, `test_file`  | Step-by-step import chain from a test file to the changed source file       |
+| Tool                   | Arguments                                       | What it returns                                                       |
+| ---------------------- | ----------------------------------------------- | --------------------------------------------------------------------- |
+| `get_affected_tests`   | `project_root`, `changed_files[]` or `git_diff` | Test files that transitively import any of the changed files          |
+| `get_dependency_graph` | `project_root`, `file_path`                     | Direct imports and importers for a specific file                      |
+| `explain_impact`       | `project_root`, `changed_file`, `test_file`     | Step-by-step import chain from a test file to the changed source file |
+| `get_coverage_gaps`    | `project_root`, `source_dirs[]?`, `limit?`      | Source files not reachable from any test — completely untested code   |
+| `get_test_summary`     | `project_root`                                  | Coverage rate, most-imported files, deepest import chains             |
+| `refresh_project`      | `project_root`                                  | Clears the cached AST — use after git pull or branch switch           |
 
 ## 🚀 Setup
 

@@ -2,7 +2,15 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import * as z from "zod/v4";
-import { getAffectedTests, getDependencyGraph, explainImpact } from "./analyzer.js";
+import {
+  getAffectedTests,
+  getDependencyGraph,
+  explainImpact,
+  getCoverageGaps,
+  getTestSummary,
+  parseGitDiff,
+  refreshProject,
+} from "./analyzer.js";
 
 const server = new McpServer({
   name: "ast-impact-mapper",
@@ -34,16 +42,36 @@ server.registerTool(
     inputSchema: projectSchema.extend({
       changed_files: z
         .array(z.string())
-        .min(1)
+        .optional()
+        .describe("List of changed file paths (absolute or relative to project_root)"),
+      git_diff: z
+        .string()
+        .optional()
         .describe(
-          "List of changed file paths (absolute or relative to project_root). " +
-            "Tip: pipe `git diff --name-only` output here."
+          "Raw output of `git diff --name-only` — newline-separated file paths. " +
+            "Use instead of changed_files when piping git output directly."
         ),
     }),
   },
-  async ({ project_root, changed_files }) => {
+  async ({ project_root, changed_files, git_diff }) => {
     try {
-      const result = getAffectedTests(project_root, changed_files);
+      const files =
+        git_diff !== undefined ? parseGitDiff(project_root, git_diff) : (changed_files ?? []);
+      if (files.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                { changed_files: [], affected_tests: [], total_affected: 0 },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+      const result = getAffectedTests(project_root, files);
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       };
@@ -95,6 +123,86 @@ server.registerTool(
       const result = explainImpact(project_root, changed_file, test_file);
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+);
+
+server.registerTool(
+  "get_coverage_gaps",
+  {
+    description:
+      "Finds source files that are not reachable from any test file through the import graph — " +
+      "i.e. completely untested code. " +
+      "Use to answer: which parts of the codebase have zero test coverage?",
+    inputSchema: projectSchema.extend({
+      source_dirs: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "Restrict results to these directories (absolute or relative to project_root). " +
+            "Defaults to the entire project."
+        ),
+      limit: z.number().int().min(1).max(200).default(50).describe("Max uncovered files to return"),
+    }),
+  },
+  async ({ project_root, source_dirs, limit }) => {
+    try {
+      const result = getCoverageGaps(project_root, { sourceDirs: source_dirs, limit });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+);
+
+server.registerTool(
+  "get_test_summary",
+  {
+    description:
+      "Returns a bird's-eye view of the project's test structure: coverage rate, " +
+      "most-imported source files (highest risk to change), and tests with the deepest import chains. " +
+      "Use to answer: what is the overall test health of this project?",
+    inputSchema: projectSchema,
+  },
+  async ({ project_root }) => {
+    try {
+      const result = getTestSummary(project_root);
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+);
+
+server.registerTool(
+  "refresh_project",
+  {
+    description:
+      "Clears the cached AST for a project root, forcing a full re-parse on the next call. " +
+      "Use after switching branches, running git pull, or adding/removing files.",
+    inputSchema: projectSchema,
+  },
+  async ({ project_root }) => {
+    try {
+      refreshProject(project_root);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              { project_root, message: "Cache cleared. Next call will re-parse the project." },
+              null,
+              2
+            ),
+          },
+        ],
       };
     } catch (err) {
       return errorResponse(err);
