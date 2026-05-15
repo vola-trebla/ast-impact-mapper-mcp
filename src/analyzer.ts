@@ -1,6 +1,7 @@
 import { Project } from "ts-morph";
 import path from "path";
 import { existsSync } from "fs";
+import { execSync } from "child_process";
 import {
   AffectedTestsResult,
   FileDependencies,
@@ -10,6 +11,10 @@ import {
 } from "./types.js";
 
 const projectCache = new Map<string, Project>();
+const graphCache = new Map<
+  string,
+  { forward: Map<string, Set<string>>; reverse: Map<string, Set<string>> }
+>();
 
 function getProject(projectRoot: string): Project {
   const cached = projectCache.get(projectRoot);
@@ -33,37 +38,40 @@ function getProject(projectRoot: string): Project {
   return project;
 }
 
-function buildForwardGraph(project: Project): Map<string, Set<string>> {
-  const graph = new Map<string, Set<string>>();
-  for (const sourceFile of project.getSourceFiles()) {
-    const filePath = sourceFile.getFilePath();
-    const imports = new Set<string>();
-    for (const decl of sourceFile.getImportDeclarations()) {
-      const resolved = decl.getModuleSpecifierSourceFile();
-      if (resolved) imports.add(resolved.getFilePath());
-    }
-    graph.set(filePath, imports);
-  }
-  return graph;
-}
+function getGraphs(projectRoot: string): {
+  forward: Map<string, Set<string>>;
+  reverse: Map<string, Set<string>>;
+} {
+  const cached = graphCache.get(projectRoot);
+  if (cached) return cached;
 
-function buildReverseGraph(project: Project): Map<string, Set<string>> {
-  const graph = new Map<string, Set<string>>();
+  const project = getProject(projectRoot);
+  const forward = new Map<string, Set<string>>();
+  const reverse = new Map<string, Set<string>>();
+
   for (const sourceFile of project.getSourceFiles()) {
     const filePath = sourceFile.getFilePath();
+    if (!forward.has(filePath)) forward.set(filePath, new Set());
+
     for (const decl of sourceFile.getImportDeclarations()) {
       const resolved = decl.getModuleSpecifierSourceFile();
       if (!resolved) continue;
       const resolvedPath = resolved.getFilePath();
-      if (!graph.has(resolvedPath)) graph.set(resolvedPath, new Set());
-      graph.get(resolvedPath)!.add(filePath);
+
+      forward.get(filePath)!.add(resolvedPath);
+
+      if (!reverse.has(resolvedPath)) reverse.set(resolvedPath, new Set());
+      reverse.get(resolvedPath)!.add(filePath);
     }
   }
-  return graph;
+
+  const graphs = { forward, reverse };
+  graphCache.set(projectRoot, graphs);
+  return graphs;
 }
 
 function isTestFile(filePath: string): boolean {
-  return /\.(spec|test)\.(ts|tsx|js|jsx)$/.test(filePath);
+  return /\.(spec|test)\.(ts|tsx|js|jsx)$/.test(filePath) || /\/__tests__\//.test(filePath);
 }
 
 function normalize(filePath: string, projectRoot: string): string {
@@ -81,11 +89,11 @@ export function parseGitDiff(projectRoot: string, gitDiff: string): string[] {
 
 export function refreshProject(projectRoot: string): void {
   projectCache.delete(projectRoot);
+  graphCache.delete(projectRoot);
 }
 
 export function getAffectedTests(projectRoot: string, changedFiles: string[]): AffectedTestsResult {
-  const project = getProject(projectRoot);
-  const reverseGraph = buildReverseGraph(project);
+  const { reverse } = getGraphs(projectRoot);
 
   const normalizedChanged = changedFiles.map((f) => normalize(f, projectRoot));
 
@@ -96,7 +104,7 @@ export function getAffectedTests(projectRoot: string, changedFiles: string[]): A
   let i = 0;
   while (i < queue.length) {
     const current = queue[i++];
-    for (const dependent of reverseGraph.get(current) ?? []) {
+    for (const dependent of reverse.get(current) ?? []) {
       if (!visited.has(dependent)) {
         visited.add(dependent);
         queue.push(dependent);
@@ -113,19 +121,56 @@ export function getAffectedTests(projectRoot: string, changedFiles: string[]): A
   };
 }
 
-export function getDependencyGraph(projectRoot: string, filePath: string): FileDependencies {
-  const project = getProject(projectRoot);
-  const normalized = normalize(filePath, projectRoot);
+export function getAffectedTestsByBranch(
+  projectRoot: string,
+  baseBranch = "main"
+): AffectedTestsResult & { base_branch: string } {
+  let diffOutput: string;
+  try {
+    diffOutput = execSync(`git diff --name-only ${baseBranch}...HEAD`, {
+      cwd: projectRoot,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch {
+    diffOutput = execSync(`git diff --name-only ${baseBranch}`, {
+      cwd: projectRoot,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  }
 
-  const forwardGraph = buildForwardGraph(project);
-  const reverseGraph = buildReverseGraph(project);
+  const files = parseGitDiff(projectRoot, diffOutput);
+  const result = getAffectedTests(projectRoot, files);
+  return { base_branch: baseBranch, ...result };
+}
+
+export function getDependencyGraph(
+  projectRoot: string,
+  filePath: string,
+  format: "json" | "mermaid" = "json"
+): FileDependencies | string {
+  const normalized = normalize(filePath, projectRoot);
+  const { forward, reverse } = getGraphs(projectRoot);
 
   const filterExternal = (f: string) => !f.includes("/node_modules/");
-  return {
-    file: normalized,
-    imports: [...(forwardGraph.get(normalized) ?? [])].filter(filterExternal),
-    imported_by: [...(reverseGraph.get(normalized) ?? [])].filter(filterExternal),
-  };
+  const imports = [...(forward.get(normalized) ?? [])].filter(filterExternal);
+  const importedBy = [...(reverse.get(normalized) ?? [])].filter(filterExternal);
+
+  if (format === "mermaid") {
+    const shortName = (f: string) => path.relative(projectRoot, f);
+    const lines = ["graph TD"];
+    for (const imp of imports) {
+      lines.push(`  "${shortName(normalized)}" --> "${shortName(imp)}"`);
+    }
+    for (const dep of importedBy) {
+      lines.push(`  "${shortName(dep)}" --> "${shortName(normalized)}"`);
+    }
+    if (lines.length === 1) lines.push(`  "${shortName(normalized)}"`);
+    return lines.join("\n");
+  }
+
+  return { file: normalized, imports, imported_by: importedBy };
 }
 
 export function explainImpact(
@@ -133,8 +178,7 @@ export function explainImpact(
   changedFile: string,
   testFile: string
 ): ImpactExplanation {
-  const project = getProject(projectRoot);
-  const forwardGraph = buildForwardGraph(project);
+  const { forward } = getGraphs(projectRoot);
 
   const normalizedChanged = normalize(changedFile, projectRoot);
   const normalizedTest = normalize(testFile, projectRoot);
@@ -147,7 +191,6 @@ export function explainImpact(
   while (i < queue.length) {
     const current = queue[i++];
     if (current === normalizedChanged) {
-      // Reconstruct the import chain
       const chain: string[] = [];
       let node: string | null = current;
       while (node !== null) {
@@ -161,7 +204,7 @@ export function explainImpact(
         import_chain: chain,
       };
     }
-    for (const imp of forwardGraph.get(current) ?? []) {
+    for (const imp of forward.get(current) ?? []) {
       if (!parent.has(imp)) {
         parent.set(imp, current);
         queue.push(imp);
@@ -181,19 +224,18 @@ export function getCoverageGaps(
   projectRoot: string,
   { sourceDirs, limit = 50 }: { sourceDirs?: string[]; limit?: number } = {}
 ): CoverageGaps {
-  const project = getProject(projectRoot);
-  const forwardGraph = buildForwardGraph(project);
+  const { forward } = getGraphs(projectRoot);
 
-  const allFiles = [...forwardGraph.keys()];
+  const allFiles = [...forward.keys()];
   const testFiles = allFiles.filter(isTestFile);
 
-  // BFS from all test files through forward graph to find all reachable source files
+  // BFS from all test files to find all reachable source files
   const reachable = new Set<string>(testFiles);
   const queue = [...testFiles];
   let i = 0;
   while (i < queue.length) {
     const current = queue[i++];
-    for (const imp of forwardGraph.get(current) ?? []) {
+    for (const imp of forward.get(current) ?? []) {
       if (!reachable.has(imp)) {
         reachable.add(imp);
         queue.push(imp);
@@ -212,29 +254,24 @@ export function getCoverageGaps(
   };
 
   const sourceFiles = allFiles.filter(isSource);
-  const uncovered = sourceFiles.filter((f) => !reachable.has(f)).slice(0, limit);
+  const uncoveredAll = sourceFiles.filter((f) => !reachable.has(f));
 
   return {
-    uncovered_files: uncovered,
+    uncovered_files: uncoveredAll.slice(0, limit),
     total_source_files: sourceFiles.length,
-    total_uncovered: sourceFiles.filter((f) => !reachable.has(f)).length,
+    total_uncovered: uncoveredAll.length,
     coverage_rate:
       sourceFiles.length > 0
-        ? Math.round(
-            ((sourceFiles.length - sourceFiles.filter((f) => !reachable.has(f)).length) /
-              sourceFiles.length) *
-              10000
-          ) / 10000
+        ? Math.round(((sourceFiles.length - uncoveredAll.length) / sourceFiles.length) * 10000) /
+          10000
         : 1,
   };
 }
 
 export function getTestSummary(projectRoot: string): TestSummary {
-  const project = getProject(projectRoot);
-  const forwardGraph = buildForwardGraph(project);
-  const reverseGraph = buildReverseGraph(project);
+  const { forward, reverse } = getGraphs(projectRoot);
 
-  const allFiles = [...forwardGraph.keys()];
+  const allFiles = [...forward.keys()];
   const testFiles = allFiles.filter(isTestFile);
   const sourceFiles = allFiles.filter(
     (f) =>
@@ -244,14 +281,12 @@ export function getTestSummary(projectRoot: string): TestSummary {
       f.startsWith(projectRoot)
   );
 
-  // Most imported source files (highest reverse-graph degree among non-test files)
   const mostImported = sourceFiles
-    .map((f) => ({ file: f, imported_by_count: (reverseGraph.get(f) ?? new Set()).size }))
+    .map((f) => ({ file: f, imported_by_count: (reverse.get(f) ?? new Set()).size }))
     .filter((x) => x.imported_by_count > 0)
     .sort((a, b) => b.imported_by_count - a.imported_by_count)
     .slice(0, 10);
 
-  // Deepest import chain per test file (BFS depth)
   const deepestChains = testFiles
     .map((testFile) => {
       const visited = new Set<string>([testFile]);
@@ -260,7 +295,7 @@ export function getTestSummary(projectRoot: string): TestSummary {
       while (frontier.length > 0) {
         const next: string[] = [];
         for (const f of frontier) {
-          for (const imp of forwardGraph.get(f) ?? []) {
+          for (const imp of forward.get(f) ?? []) {
             if (!visited.has(imp)) {
               visited.add(imp);
               next.push(imp);
@@ -275,13 +310,12 @@ export function getTestSummary(projectRoot: string): TestSummary {
     .sort((a, b) => b.depth - a.depth)
     .slice(0, 10);
 
-  // Coverage: reachable source files from tests
   const reachable = new Set<string>(testFiles);
   const queue = [...testFiles];
   let i = 0;
   while (i < queue.length) {
     const current = queue[i++];
-    for (const imp of forwardGraph.get(current) ?? []) {
+    for (const imp of forward.get(current) ?? []) {
       if (!reachable.has(imp)) {
         reachable.add(imp);
         queue.push(imp);
