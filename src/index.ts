@@ -4,6 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import * as z from "zod/v4";
 import {
   getAffectedTests,
+  getAffectedTestsByBranch,
   getDependencyGraph,
   explainImpact,
   getCoverageGaps,
@@ -82,29 +83,6 @@ server.registerTool(
 );
 
 server.registerTool(
-  "get_dependency_graph",
-  {
-    description:
-      "Returns the direct import graph for a specific file: " +
-      "what it imports, and what imports it. " +
-      "Use to answer: what depends on this file? What does this file depend on?",
-    inputSchema: projectSchema.extend({
-      file_path: z.string().describe("Path to the file (absolute or relative to project_root)"),
-    }),
-  },
-  async ({ project_root, file_path }) => {
-    try {
-      const result = getDependencyGraph(project_root, file_path);
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      };
-    } catch (err) {
-      return errorResponse(err);
-    }
-  }
-);
-
-server.registerTool(
   "explain_impact",
   {
     description:
@@ -123,6 +101,60 @@ server.registerTool(
       const result = explainImpact(project_root, changed_file, test_file);
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+);
+
+server.registerTool(
+  "get_affected_tests_by_branch",
+  {
+    description:
+      "Runs `git diff --name-only <base_branch>...HEAD` internally and returns affected test files. " +
+      "Use instead of get_affected_tests when you want the server to handle the git diff automatically.",
+    inputSchema: projectSchema.extend({
+      base_branch: z.string().default("main").describe("Branch to diff against (default: main)"),
+    }),
+  },
+  async ({ project_root, base_branch }) => {
+    try {
+      const result = getAffectedTestsByBranch(project_root, base_branch);
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+);
+
+server.registerTool(
+  "get_dependency_graph",
+  {
+    description:
+      "Returns the direct import graph for a specific file: " +
+      "what it imports, and what imports it. " +
+      "Use to answer: what depends on this file? What does this file depend on?",
+    inputSchema: projectSchema.extend({
+      file_path: z.string().describe("Path to the file (absolute or relative to project_root)"),
+      format: z
+        .enum(["json", "mermaid"])
+        .default("json")
+        .describe("Output format — json (default) or mermaid flowchart diagram"),
+    }),
+  },
+  async ({ project_root, file_path, format }) => {
+    try {
+      const result = getDependencyGraph(project_root, file_path, format);
+      return {
+        content: [
+          {
+            type: "text",
+            text: typeof result === "string" ? result : JSON.stringify(result, null, 2),
+          },
+        ],
       };
     } catch (err) {
       return errorResponse(err);
