@@ -16,12 +16,17 @@ function getProject(projectRoot: string): Project {
   if (cached) return cached;
 
   const tsConfigPath = path.join(projectRoot, "tsconfig.json");
+  // allowJs lets ts-morph resolve .js/.jsx imports even in TS projects
   const project = existsSync(tsConfigPath)
-    ? new Project({ tsConfigFilePath: tsConfigPath, skipAddingFilesFromTsConfig: false })
-    : new Project();
+    ? new Project({
+        tsConfigFilePath: tsConfigPath,
+        skipAddingFilesFromTsConfig: false,
+        compilerOptions: { allowJs: true },
+      })
+    : new Project({ compilerOptions: { allowJs: true } });
 
   if (!existsSync(tsConfigPath)) {
-    project.addSourceFilesAtPaths(`${projectRoot}/**/*.{ts,tsx}`);
+    project.addSourceFilesAtPaths(`${projectRoot}/**/*.{ts,tsx,js,jsx}`);
   }
 
   projectCache.set(projectRoot, project);
@@ -58,7 +63,7 @@ function buildReverseGraph(project: Project): Map<string, Set<string>> {
 }
 
 function isTestFile(filePath: string): boolean {
-  return /\.(spec|test)\.(ts|tsx)$/.test(filePath);
+  return /\.(spec|test)\.(ts|tsx|js|jsx)$/.test(filePath);
 }
 
 function normalize(filePath: string, projectRoot: string): string {
@@ -69,7 +74,7 @@ export function parseGitDiff(projectRoot: string, gitDiff: string): string[] {
   return gitDiff
     .split("\n")
     .map((line) => line.trim())
-    .filter((line) => line.length > 0 && /\.(ts|tsx)$/.test(line))
+    .filter((line) => line.length > 0 && /\.(ts|tsx|js|jsx)$/.test(line))
     .map((line) => normalize(line, projectRoot))
     .filter((f) => existsSync(f));
 }
