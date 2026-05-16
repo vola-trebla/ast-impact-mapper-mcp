@@ -1,5 +1,10 @@
 # 🗺️ ast-impact-mapper-mcp
 
+[![npm version](https://img.shields.io/npm/v/ast-impact-mapper-mcp.svg)](https://www.npmjs.com/package/ast-impact-mapper-mcp)
+[![npm downloads](https://img.shields.io/npm/dm/ast-impact-mapper-mcp.svg)](https://www.npmjs.com/package/ast-impact-mapper-mcp)
+[![CI](https://github.com/vola-trebla/ast-impact-mapper-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/vola-trebla/ast-impact-mapper-mcp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 An MCP server that uses the TypeScript AST to determine exactly which tests are affected by a code change — so your AI agent stops running the entire suite and starts running only what matters.
 
 ## 🤔 The Problem
