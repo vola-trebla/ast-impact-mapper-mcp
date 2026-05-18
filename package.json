@@ -53,5 +53,10 @@
     "src/**/*.ts": [
       "eslint --fix"
     ]
+  },
+  "mcpName": "io.github.vola-trebla/ast-impact-mapper-mcp",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vola-trebla/ast-impact-mapper-mcp.git"
   }
 }
