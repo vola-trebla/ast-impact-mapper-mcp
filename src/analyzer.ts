@@ -1,14 +1,14 @@
-import { Project } from "ts-morph";
-import path from "path";
-import { existsSync } from "fs";
-import { execSync } from "child_process";
+import { Project } from 'ts-morph';
+import path from 'path';
+import { existsSync } from 'fs';
+import { execSync } from 'child_process';
 import {
   AffectedTestsResult,
   FileDependencies,
   ImpactExplanation,
   CoverageGaps,
   TestSummary,
-} from "./types.js";
+} from './types.js';
 
 const projectCache = new Map<string, Project>();
 const graphCache = new Map<
@@ -20,7 +20,7 @@ function getProject(projectRoot: string): Project {
   const cached = projectCache.get(projectRoot);
   if (cached) return cached;
 
-  const tsConfigPath = path.join(projectRoot, "tsconfig.json");
+  const tsConfigPath = path.join(projectRoot, 'tsconfig.json');
   // allowJs lets ts-morph resolve .js/.jsx imports even in TS projects
   const project = existsSync(tsConfigPath)
     ? new Project({
@@ -80,7 +80,7 @@ function normalize(filePath: string, projectRoot: string): string {
 
 export function parseGitDiff(projectRoot: string, gitDiff: string): string[] {
   return gitDiff
-    .split("\n")
+    .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && /\.(ts|tsx|js|jsx)$/.test(line))
     .map((line) => normalize(line, projectRoot))
@@ -123,20 +123,20 @@ export function getAffectedTests(projectRoot: string, changedFiles: string[]): A
 
 export function getAffectedTestsByBranch(
   projectRoot: string,
-  baseBranch = "main"
+  baseBranch = 'main'
 ): AffectedTestsResult & { base_branch: string } {
   let diffOutput: string;
   try {
     diffOutput = execSync(`git diff --name-only ${baseBranch}...HEAD`, {
       cwd: projectRoot,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
   } catch {
     diffOutput = execSync(`git diff --name-only ${baseBranch}`, {
       cwd: projectRoot,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
   }
 
@@ -148,18 +148,18 @@ export function getAffectedTestsByBranch(
 export function getDependencyGraph(
   projectRoot: string,
   filePath: string,
-  format: "json" | "mermaid" = "json"
+  format: 'json' | 'mermaid' = 'json'
 ): FileDependencies | string {
   const normalized = normalize(filePath, projectRoot);
   const { forward, reverse } = getGraphs(projectRoot);
 
-  const filterExternal = (f: string) => !f.includes("/node_modules/");
+  const filterExternal = (f: string) => !f.includes('/node_modules/');
   const imports = [...(forward.get(normalized) ?? [])].filter(filterExternal);
   const importedBy = [...(reverse.get(normalized) ?? [])].filter(filterExternal);
 
-  if (format === "mermaid") {
+  if (format === 'mermaid') {
     const shortName = (f: string) => path.relative(projectRoot, f);
-    const lines = ["graph TD"];
+    const lines = ['graph TD'];
     for (const imp of imports) {
       lines.push(`  "${shortName(normalized)}" --> "${shortName(imp)}"`);
     }
@@ -167,7 +167,7 @@ export function getDependencyGraph(
       lines.push(`  "${shortName(dep)}" --> "${shortName(normalized)}"`);
     }
     if (lines.length === 1) lines.push(`  "${shortName(normalized)}"`);
-    return lines.join("\n");
+    return lines.join('\n');
   }
 
   return { file: normalized, imports, imported_by: importedBy };
@@ -245,8 +245,8 @@ export function getCoverageGaps(
 
   const isSource = (f: string): boolean => {
     if (isTestFile(f)) return false;
-    if (f.includes("/node_modules/")) return false;
-    if (f.endsWith(".d.ts")) return false;
+    if (f.includes('/node_modules/')) return false;
+    if (f.endsWith('.d.ts')) return false;
     if (sourceDirs && sourceDirs.length > 0) {
       return sourceDirs.some((dir) => f.startsWith(normalize(dir, projectRoot)));
     }
@@ -276,8 +276,8 @@ export function getTestSummary(projectRoot: string): TestSummary {
   const sourceFiles = allFiles.filter(
     (f) =>
       !isTestFile(f) &&
-      !f.includes("/node_modules/") &&
-      !f.endsWith(".d.ts") &&
+      !f.includes('/node_modules/') &&
+      !f.endsWith('.d.ts') &&
       f.startsWith(projectRoot)
   );
 

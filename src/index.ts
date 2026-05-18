@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import * as z from "zod/v4";
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import * as z from 'zod/v4';
 import {
   getAffectedTests,
   getAffectedTestsByBranch,
@@ -11,46 +11,46 @@ import {
   getTestSummary,
   parseGitDiff,
   refreshProject,
-} from "./analyzer.js";
+} from './analyzer.js';
 
 const server = new McpServer({
-  name: "ast-impact-mapper",
-  version: "0.1.0",
+  name: 'ast-impact-mapper',
+  version: '0.1.0',
 });
 
 const projectSchema = z.object({
   project_root: z
     .string()
-    .describe("Absolute path to the TypeScript project root (must contain tsconfig.json)"),
+    .describe('Absolute path to the TypeScript project root (must contain tsconfig.json)'),
 });
 
 function errorResponse(err: unknown) {
   return {
     content: [
-      { type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` },
+      { type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` },
     ],
     isError: true,
   };
 }
 
 server.registerTool(
-  "get_affected_tests",
+  'get_affected_tests',
   {
     description:
-      "Given a list of changed source files, returns which test files are affected — " +
-      "directly or transitively through the import graph. " +
-      "Use to answer: which tests should I run after this code change?",
+      'Given a list of changed source files, returns which test files are affected — ' +
+      'directly or transitively through the import graph. ' +
+      'Use to answer: which tests should I run after this code change?',
     inputSchema: projectSchema.extend({
       changed_files: z
         .array(z.string())
         .optional()
-        .describe("List of changed file paths (absolute or relative to project_root)"),
+        .describe('List of changed file paths (absolute or relative to project_root)'),
       git_diff: z
         .string()
         .optional()
         .describe(
-          "Raw output of `git diff --name-only` — newline-separated file paths. " +
-            "Use instead of changed_files when piping git output directly."
+          'Raw output of `git diff --name-only` — newline-separated file paths. ' +
+            'Use instead of changed_files when piping git output directly.'
         ),
     }),
   },
@@ -62,7 +62,7 @@ server.registerTool(
         return {
           content: [
             {
-              type: "text",
+              type: 'text',
               text: JSON.stringify(
                 { changed_files: [], affected_tests: [], total_affected: 0 },
                 null,
@@ -74,7 +74,7 @@ server.registerTool(
       }
       const result = getAffectedTests(project_root, files);
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       };
     } catch (err) {
       return errorResponse(err);
@@ -83,24 +83,24 @@ server.registerTool(
 );
 
 server.registerTool(
-  "explain_impact",
+  'explain_impact',
   {
     description:
-      "Finds the exact import chain that connects a changed source file to a test file. " +
-      "Use to answer: why does changing file X cause test Y to be affected? " +
-      "Returns the step-by-step import path from the test to the changed file.",
+      'Finds the exact import chain that connects a changed source file to a test file. ' +
+      'Use to answer: why does changing file X cause test Y to be affected? ' +
+      'Returns the step-by-step import path from the test to the changed file.',
     inputSchema: projectSchema.extend({
       changed_file: z
         .string()
-        .describe("The source file that was changed (absolute or relative to project_root)"),
-      test_file: z.string().describe("The test file to explain the connection for"),
+        .describe('The source file that was changed (absolute or relative to project_root)'),
+      test_file: z.string().describe('The test file to explain the connection for'),
     }),
   },
   async ({ project_root, changed_file, test_file }) => {
     try {
       const result = explainImpact(project_root, changed_file, test_file);
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       };
     } catch (err) {
       return errorResponse(err);
@@ -109,20 +109,20 @@ server.registerTool(
 );
 
 server.registerTool(
-  "get_affected_tests_by_branch",
+  'get_affected_tests_by_branch',
   {
     description:
-      "Runs `git diff --name-only <base_branch>...HEAD` internally and returns affected test files. " +
-      "Use instead of get_affected_tests when you want the server to handle the git diff automatically.",
+      'Runs `git diff --name-only <base_branch>...HEAD` internally and returns affected test files. ' +
+      'Use instead of get_affected_tests when you want the server to handle the git diff automatically.',
     inputSchema: projectSchema.extend({
-      base_branch: z.string().default("main").describe("Branch to diff against (default: main)"),
+      base_branch: z.string().default('main').describe('Branch to diff against (default: main)'),
     }),
   },
   async ({ project_root, base_branch }) => {
     try {
       const result = getAffectedTestsByBranch(project_root, base_branch);
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       };
     } catch (err) {
       return errorResponse(err);
@@ -131,18 +131,18 @@ server.registerTool(
 );
 
 server.registerTool(
-  "get_dependency_graph",
+  'get_dependency_graph',
   {
     description:
-      "Returns the direct import graph for a specific file: " +
-      "what it imports, and what imports it. " +
-      "Use to answer: what depends on this file? What does this file depend on?",
+      'Returns the direct import graph for a specific file: ' +
+      'what it imports, and what imports it. ' +
+      'Use to answer: what depends on this file? What does this file depend on?',
     inputSchema: projectSchema.extend({
-      file_path: z.string().describe("Path to the file (absolute or relative to project_root)"),
+      file_path: z.string().describe('Path to the file (absolute or relative to project_root)'),
       format: z
-        .enum(["json", "mermaid"])
-        .default("json")
-        .describe("Output format — json (default) or mermaid flowchart diagram"),
+        .enum(['json', 'mermaid'])
+        .default('json')
+        .describe('Output format — json (default) or mermaid flowchart diagram'),
     }),
   },
   async ({ project_root, file_path, format }) => {
@@ -151,8 +151,8 @@ server.registerTool(
       return {
         content: [
           {
-            type: "text",
-            text: typeof result === "string" ? result : JSON.stringify(result, null, 2),
+            type: 'text',
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
           },
         ],
       };
@@ -163,28 +163,28 @@ server.registerTool(
 );
 
 server.registerTool(
-  "get_coverage_gaps",
+  'get_coverage_gaps',
   {
     description:
-      "Finds source files that are not reachable from any test file through the import graph — " +
-      "i.e. completely untested code. " +
-      "Use to answer: which parts of the codebase have zero test coverage?",
+      'Finds source files that are not reachable from any test file through the import graph — ' +
+      'i.e. completely untested code. ' +
+      'Use to answer: which parts of the codebase have zero test coverage?',
     inputSchema: projectSchema.extend({
       source_dirs: z
         .array(z.string())
         .optional()
         .describe(
-          "Restrict results to these directories (absolute or relative to project_root). " +
-            "Defaults to the entire project."
+          'Restrict results to these directories (absolute or relative to project_root). ' +
+            'Defaults to the entire project.'
         ),
-      limit: z.number().int().min(1).max(200).default(50).describe("Max uncovered files to return"),
+      limit: z.number().int().min(1).max(200).default(50).describe('Max uncovered files to return'),
     }),
   },
   async ({ project_root, source_dirs, limit }) => {
     try {
       const result = getCoverageGaps(project_root, { sourceDirs: source_dirs, limit });
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       };
     } catch (err) {
       return errorResponse(err);
@@ -193,19 +193,19 @@ server.registerTool(
 );
 
 server.registerTool(
-  "get_test_summary",
+  'get_test_summary',
   {
     description:
       "Returns a bird's-eye view of the project's test structure: coverage rate, " +
-      "most-imported source files (highest risk to change), and tests with the deepest import chains. " +
-      "Use to answer: what is the overall test health of this project?",
+      'most-imported source files (highest risk to change), and tests with the deepest import chains. ' +
+      'Use to answer: what is the overall test health of this project?',
     inputSchema: projectSchema,
   },
   async ({ project_root }) => {
     try {
       const result = getTestSummary(project_root);
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       };
     } catch (err) {
       return errorResponse(err);
@@ -214,11 +214,11 @@ server.registerTool(
 );
 
 server.registerTool(
-  "refresh_project",
+  'refresh_project',
   {
     description:
-      "Clears the cached AST for a project root, forcing a full re-parse on the next call. " +
-      "Use after switching branches, running git pull, or adding/removing files.",
+      'Clears the cached AST for a project root, forcing a full re-parse on the next call. ' +
+      'Use after switching branches, running git pull, or adding/removing files.',
     inputSchema: projectSchema,
   },
   async ({ project_root }) => {
@@ -227,9 +227,9 @@ server.registerTool(
       return {
         content: [
           {
-            type: "text",
+            type: 'text',
             text: JSON.stringify(
-              { project_root, message: "Cache cleared. Next call will re-parse the project." },
+              { project_root, message: 'Cache cleared. Next call will re-parse the project.' },
               null,
               2
             ),
