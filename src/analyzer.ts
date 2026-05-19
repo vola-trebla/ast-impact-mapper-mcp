@@ -9,6 +9,7 @@ import {
   CoverageGaps,
   TestSummary,
   RenameAwareDiffResult,
+  UnreachableModulesResult,
 } from './types.js';
 
 const projectCache = new Map<string, Project>();
@@ -337,6 +338,60 @@ export function getAffectedTestsByBranchRenameAware(
   );
   const result = getAffectedTests(projectRoot, changedFilePaths);
   return { base_branch: baseBranch, renamed_files: renamedFiles, ...result };
+}
+
+const ENTRY_POINT_PATTERNS = [
+  /\/index\.(ts|tsx|js|jsx)$/,
+  /\/main\.(ts|tsx|js|jsx)$/,
+  /\/app\.(ts|tsx|js|jsx)$/,
+  /\/pages\//,
+  /\/app\//,
+  /\/routes\//,
+  /\/api\//,
+  /\/bin\//,
+];
+
+export function identifyUnreachableModules(
+  projectRoot: string,
+  { entryPoints, limit = 50 }: { entryPoints?: string[]; limit?: number } = {}
+): UnreachableModulesResult {
+  const { forward, reverse } = getGraphs(projectRoot);
+
+  const normalizedEntryPoints = new Set((entryPoints ?? []).map((f) => normalize(f, projectRoot)));
+
+  const isSource = (f: string): boolean => {
+    if (isTestFile(f)) return false;
+    if (f.includes('/node_modules/')) return false;
+    if (f.endsWith('.d.ts')) return false;
+    return f.startsWith(projectRoot);
+  };
+
+  const isEntryPoint = (f: string): boolean =>
+    normalizedEntryPoints.has(f) || ENTRY_POINT_PATTERNS.some((p) => p.test(f));
+
+  const allFiles = [...forward.keys()];
+  const sourceFiles = allFiles.filter(isSource);
+
+  const detectedEntryPoints: string[] = [];
+  const unreachableFiles: string[] = [];
+
+  for (const file of sourceFiles) {
+    const incomingEdges = reverse.get(file);
+    if (incomingEdges && incomingEdges.size > 0) continue;
+
+    if (isEntryPoint(file)) {
+      detectedEntryPoints.push(file);
+    } else {
+      unreachableFiles.push(file);
+    }
+  }
+
+  return {
+    unreachable_files: unreachableFiles.slice(0, limit),
+    entry_points_detected: detectedEntryPoints,
+    total_source_files: sourceFiles.length,
+    total_unreachable: unreachableFiles.length,
+  };
 }
 
 export function getTestSummary(projectRoot: string): TestSummary {

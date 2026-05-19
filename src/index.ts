@@ -6,6 +6,7 @@ import {
   getAffectedTests,
   getAffectedTestsByBranch,
   getAffectedTestsByBranchRenameAware,
+  identifyUnreachableModules,
   getDependencyGraph,
   explainImpact,
   getCoverageGaps,
@@ -208,6 +209,43 @@ server.registerTool(
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+);
+
+server.registerTool(
+  'identify_unreachable_modules',
+  {
+    description:
+      'Finds source files that are never imported by any other file — dead code candidates safe to delete. ' +
+      'Automatically excludes known entry points (index.ts, main.ts, pages/, routes/, app/, api/, bin/). ' +
+      'Use to answer: which files in this codebase are orphaned and can be safely removed?',
+    inputSchema: projectSchema.extend({
+      entry_points: z
+        .array(z.string())
+        .optional()
+        .describe(
+          'Additional entry point files to exclude (absolute or relative to project_root). ' +
+            'Common patterns like index.ts and pages/ are auto-excluded.'
+        ),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .default(50)
+        .describe('Max unreachable files to return (default: 50)'),
+    }),
+  },
+  async ({ project_root, entry_points, limit }) => {
+    try {
+      const result = identifyUnreachableModules(project_root, {
+        entryPoints: entry_points,
+        limit,
+      });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (err) {
       return errorResponse(err);
     }
