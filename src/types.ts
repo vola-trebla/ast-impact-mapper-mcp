@@ -69,3 +69,18 @@ export interface DifferentiateTypeImpactResult {
   total_tests_must_run: number;
   total_tests_skippable: number;
 }
+
+export interface ApiMutation {
+  export_name: string;
+  kind: string;
+  mutation_type: 'added' | 'removed' | 'signature_changed' | 'body_only';
+  old_signature?: string;
+  new_signature?: string;
+}
+
+export interface ApiSurfaceMutationResult {
+  file: string;
+  change_type: 'internal_refactor' | 'breaking_api_change';
+  changed_signatures: ApiMutation[];
+  affected_exports: string[];
+}
