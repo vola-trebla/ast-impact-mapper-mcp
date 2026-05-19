@@ -15,6 +15,7 @@
   "scripts": {
     "build": "tsc && chmod +x dist/index.js",
     "prepack": "chmod +x dist/index.js",
+    "test": "vitest run --passWithNoTests",
     "lint": "eslint src",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -44,7 +45,8 @@
     "husky": "^9.1.7",
     "lint-staged": "^15.5.2",
     "prettier": "^3.8.3",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
   },
   "lint-staged": {
     "**/*.{ts,mjs,json,md}": [

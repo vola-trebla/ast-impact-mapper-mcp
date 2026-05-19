@@ -8,6 +8,7 @@ import {
   ImpactExplanation,
   CoverageGaps,
   TestSummary,
+  RenameAwareDiffResult,
 } from './types.js';
 
 const projectCache = new Map<string, Project>();
@@ -266,6 +267,76 @@ export function getCoverageGaps(
           10000
         : 1,
   };
+}
+
+export function parseNameStatus(
+  statusOutput: string,
+  projectRoot: string,
+  similarityThreshold: number
+): {
+  renamedFiles: Array<{ from: string; to: string; similarity: number }>;
+  changedFilePaths: string[];
+} {
+  const renamedFiles: Array<{ from: string; to: string; similarity: number }> = [];
+  const changedFilePaths: string[] = [];
+
+  for (const line of statusOutput.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const parts = trimmed.split('\t');
+    const status = parts[0];
+
+    if (status.startsWith('R') || status.startsWith('C')) {
+      const similarity = parseInt(status.slice(1), 10) || similarityThreshold;
+      const fromRel = parts[1];
+      const toRel = parts[2];
+      if (fromRel && toRel && /\.(ts|tsx|js|jsx)$/.test(toRel)) {
+        renamedFiles.push({
+          from: normalize(fromRel, projectRoot),
+          to: normalize(toRel, projectRoot),
+          similarity,
+        });
+        changedFilePaths.push(normalize(toRel, projectRoot));
+      }
+    } else if (/^[MAD]$/.test(status)) {
+      const file = parts[1];
+      if (file && /\.(ts|tsx|js|jsx)$/.test(file)) {
+        changedFilePaths.push(normalize(file, projectRoot));
+      }
+    }
+  }
+
+  return { renamedFiles, changedFilePaths };
+}
+
+export function getAffectedTestsByBranchRenameAware(
+  projectRoot: string,
+  baseBranch = 'main',
+  similarityThreshold = 90
+): RenameAwareDiffResult {
+  const flags = `--name-status -M${similarityThreshold}% --ignore-all-space`;
+  let statusOutput: string;
+  try {
+    statusOutput = execSync(`git diff ${flags} ${baseBranch}...HEAD`, {
+      cwd: projectRoot,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch {
+    statusOutput = execSync(`git diff ${flags} ${baseBranch}`, {
+      cwd: projectRoot,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  }
+
+  const { renamedFiles, changedFilePaths } = parseNameStatus(
+    statusOutput,
+    projectRoot,
+    similarityThreshold
+  );
+  const result = getAffectedTests(projectRoot, changedFilePaths);
+  return { base_branch: baseBranch, renamed_files: renamedFiles, ...result };
 }
 
 export function getTestSummary(projectRoot: string): TestSummary {

@@ -32,3 +32,8 @@ export interface TestSummary {
   most_imported_files: { file: string; imported_by_count: number }[];
   deepest_import_chains: { test: string; depth: number }[];
 }
+
+export interface RenameAwareDiffResult extends AffectedTestsResult {
+  base_branch: string;
+  renamed_files: Array<{ from: string; to: string; similarity: number }>;
+}
