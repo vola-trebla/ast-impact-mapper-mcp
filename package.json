@@ -1,6 +1,6 @@
 {
   "name": "ast-impact-mapper-mcp",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "MCP server that uses TypeScript AST to find which tests are affected by a code change",
   "type": "module",
   "main": "dist/index.js",
