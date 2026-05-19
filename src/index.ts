@@ -9,6 +9,7 @@ import {
   identifyUnreachableModules,
   detectArchitecturalCycles,
   differentiateTypeImpact,
+  analyzeApiSurfaceMutation,
   getDependencyGraph,
   explainImpact,
   getCoverageGaps,
@@ -290,6 +291,30 @@ server.registerTool(
   async ({ project_root, changed_files }) => {
     try {
       const result = differentiateTypeImpact(project_root, changed_files);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+);
+
+server.registerTool(
+  'analyze_api_surface_mutation',
+  {
+    description:
+      'Compares a file against its HEAD version and classifies the change as ' +
+      '`breaking_api_change` (exported function signature changed, parameter removed/added, ' +
+      'interface field removed) or `internal_refactor` (only implementation body changed). ' +
+      'Use to answer: is this PR a breaking change or a safe refactor?',
+    inputSchema: projectSchema.extend({
+      file_path: z
+        .string()
+        .describe('Path to the changed file (absolute or relative to project_root)'),
+    }),
+  },
+  async ({ project_root, file_path }) => {
+    try {
+      const result = analyzeApiSurfaceMutation(project_root, file_path);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (err) {
       return errorResponse(err);

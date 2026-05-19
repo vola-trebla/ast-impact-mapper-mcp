@@ -12,6 +12,8 @@ import {
   UnreachableModulesResult,
   ArchitecturalCyclesResult,
   DifferentiateTypeImpactResult,
+  ApiMutation,
+  ApiSurfaceMutationResult,
 } from './types.js';
 
 const projectCache = new Map<string, Project>();
@@ -536,6 +538,184 @@ export function differentiateTypeImpact(
     files: fileResults,
     total_tests_must_run: mustRunSet.size,
     total_tests_skippable: skippableSet.size,
+  };
+}
+
+function extractSignatures(sf: ReturnType<Project['getSourceFileOrThrow']>): Map<string, string> {
+  const sigs = new Map<string, string>();
+
+  for (const fn of sf.getFunctions()) {
+    if (!fn.isExported()) continue;
+    const name = fn.getName();
+    if (!name) continue;
+    const params = fn
+      .getParameters()
+      .map((p) => {
+        const opt = p.hasQuestionToken() ? '?' : '';
+        const rest = p.isRestParameter() ? '...' : '';
+        const type = p.getTypeNode()?.getText() ?? 'any';
+        return `${rest}${p.getName()}${opt}:${type}`;
+      })
+      .join(',');
+    const ret = fn.getReturnTypeNode()?.getText() ?? '';
+    sigs.set(name, `fn(${params})${ret ? `:${ret}` : ''}`);
+  }
+
+  for (const iface of sf.getInterfaces()) {
+    if (!iface.isExported()) continue;
+    const members = iface
+      .getMembers()
+      .map((m) => m.getText().replace(/\s+/g, ' ').trim())
+      .sort()
+      .join(';');
+    sigs.set(iface.getName(), `iface{${members}}`);
+  }
+
+  for (const ta of sf.getTypeAliases()) {
+    if (!ta.isExported()) continue;
+    sigs.set(ta.getName(), `type=${ta.getTypeNode()?.getText() ?? ''}`);
+  }
+
+  for (const vs of sf.getVariableStatements()) {
+    if (!vs.isExported()) continue;
+    for (const decl of vs.getDeclarations()) {
+      const type = decl.getTypeNode()?.getText() ?? '';
+      sigs.set(decl.getName(), `var:${type}`);
+    }
+  }
+
+  for (const cls of sf.getClasses()) {
+    if (!cls.isExported()) continue;
+    const name = cls.getName();
+    if (!name) continue;
+    const pub = [
+      ...cls
+        .getMethods()
+        .filter(
+          (m) =>
+            !m.hasModifier(SyntaxKind.PrivateKeyword) && !m.hasModifier(SyntaxKind.ProtectedKeyword)
+        ),
+      ...cls
+        .getProperties()
+        .filter(
+          (p) =>
+            !p.hasModifier(SyntaxKind.PrivateKeyword) && !p.hasModifier(SyntaxKind.ProtectedKeyword)
+        ),
+    ]
+      .map((m) => m.getName())
+      .sort();
+    sigs.set(name, `class{${pub.join(',')}}`);
+  }
+
+  return sigs;
+}
+
+function sigKind(sig: string): string {
+  if (sig.startsWith('fn')) return 'function';
+  if (sig.startsWith('iface')) return 'interface';
+  if (sig.startsWith('type=')) return 'type';
+  if (sig.startsWith('var:')) return 'variable';
+  if (sig.startsWith('class')) return 'class';
+  return 'unknown';
+}
+
+export function analyzeApiSurfaceMutation(
+  projectRoot: string,
+  filePath: string
+): ApiSurfaceMutationResult {
+  const normalized = normalize(filePath, projectRoot);
+  const relative = path.relative(projectRoot, normalized);
+
+  let oldContent: string | null = null;
+  try {
+    oldContent = execSync(`git show HEAD:${relative}`, {
+      cwd: projectRoot,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch {
+    // new file — no HEAD version
+  }
+
+  const project = getProject(projectRoot);
+  const newSf = project.getSourceFile(normalized);
+  if (!newSf) throw new Error(`File not found in project: ${normalized}`);
+
+  const newSigs = extractSignatures(newSf);
+
+  if (!oldContent) {
+    const mutations: ApiMutation[] = [...newSigs.entries()].map(([name, sig]) => ({
+      export_name: name,
+      kind: sigKind(sig),
+      mutation_type: 'added' as const,
+      new_signature: sig,
+    }));
+    return {
+      file: normalized,
+      change_type: 'internal_refactor',
+      changed_signatures: mutations,
+      affected_exports: [],
+    };
+  }
+
+  const inMemory = new Project({ useInMemoryFileSystem: true, compilerOptions: { allowJs: true } });
+  const oldSf = inMemory.createSourceFile('old.ts', oldContent);
+  const oldSigs = extractSignatures(oldSf);
+
+  const mutations: ApiMutation[] = [];
+  let isBreaking = false;
+
+  for (const [name, oldSig] of oldSigs) {
+    if (!newSigs.has(name)) {
+      mutations.push({
+        export_name: name,
+        kind: sigKind(oldSig),
+        mutation_type: 'removed',
+        old_signature: oldSig,
+      });
+      isBreaking = true;
+    } else {
+      const newSig = newSigs.get(name)!;
+      if (oldSig !== newSig) {
+        mutations.push({
+          export_name: name,
+          kind: sigKind(newSig),
+          mutation_type: 'signature_changed',
+          old_signature: oldSig,
+          new_signature: newSig,
+        });
+        isBreaking = true;
+      }
+    }
+  }
+  for (const [name, newSig] of newSigs) {
+    if (!oldSigs.has(name)) {
+      mutations.push({
+        export_name: name,
+        kind: sigKind(newSig),
+        mutation_type: 'added',
+        new_signature: newSig,
+      });
+    }
+  }
+
+  if (mutations.length === 0) {
+    mutations.push({
+      export_name: '<implementation>',
+      kind: 'implementation',
+      mutation_type: 'body_only',
+    });
+  }
+
+  const affectedExports = mutations
+    .filter((m) => m.mutation_type === 'removed' || m.mutation_type === 'signature_changed')
+    .map((m) => m.export_name);
+
+  return {
+    file: normalized,
+    change_type: isBreaking ? 'breaking_api_change' : 'internal_refactor',
+    changed_signatures: mutations,
+    affected_exports: affectedExports,
   };
 }
 
