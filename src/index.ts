@@ -8,6 +8,7 @@ import {
   getAffectedTestsByBranchRenameAware,
   identifyUnreachableModules,
   detectArchitecturalCycles,
+  differentiateTypeImpact,
   getDependencyGraph,
   explainImpact,
   getCoverageGaps,
@@ -265,6 +266,30 @@ server.registerTool(
   async ({ project_root }) => {
     try {
       const result = detectArchitecturalCycles(project_root);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+);
+
+server.registerTool(
+  'differentiate_type_impact',
+  {
+    description:
+      'Classifies each changed file as type-only or runtime, then splits affected tests into ' +
+      '"must run" vs "skippable". A test is skippable when the changed file contains only ' +
+      'TypeScript type declarations (interfaces/type aliases) or the test imports it via `import type`. ' +
+      'Use to answer: which tests can I skip after a type-only refactor?',
+    inputSchema: projectSchema.extend({
+      changed_files: z
+        .array(z.string())
+        .describe('Changed file paths (absolute or relative to project_root)'),
+    }),
+  },
+  async ({ project_root, changed_files }) => {
+    try {
+      const result = differentiateTypeImpact(project_root, changed_files);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (err) {
       return errorResponse(err);
