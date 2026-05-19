@@ -5,6 +5,7 @@ import * as z from 'zod/v4';
 import {
   getAffectedTests,
   getAffectedTestsByBranch,
+  getAffectedTestsByBranchRenameAware,
   getDependencyGraph,
   explainImpact,
   getCoverageGaps,
@@ -207,6 +208,38 @@ server.registerTool(
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+);
+
+server.registerTool(
+  'get_rename_aware_diff',
+  {
+    description:
+      'Like get_affected_tests_by_branch, but correctly handles renamed and moved files. ' +
+      'Uses --find-renames to detect file moves and --ignore-all-space to skip whitespace-only changes. ' +
+      'Use instead of get_affected_tests_by_branch when the branch contains refactors or file moves.',
+    inputSchema: projectSchema.extend({
+      base_branch: z.string().default('main').describe('Branch to diff against (default: main)'),
+      similarity_threshold: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .default(90)
+        .describe('Minimum similarity % to consider a file move a rename (default: 90)'),
+    }),
+  },
+  async ({ project_root, base_branch, similarity_threshold }) => {
+    try {
+      const result = getAffectedTestsByBranchRenameAware(
+        project_root,
+        base_branch,
+        similarity_threshold
+      );
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (err) {
       return errorResponse(err);
     }
