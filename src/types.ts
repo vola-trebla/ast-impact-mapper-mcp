@@ -55,3 +55,17 @@ export interface ArchitecturalCyclesResult {
   total_cycles: number;
   files_in_cycles: string[];
 }
+
+export interface TypeImpactFileResult {
+  file: string;
+  runtime_impact: boolean;
+  reason: 'type_only_change' | 'runtime_logic_changed';
+  affected_tests_must_run: string[];
+  affected_tests_skippable: string[];
+}
+
+export interface DifferentiateTypeImpactResult {
+  files: TypeImpactFileResult[];
+  total_tests_must_run: number;
+  total_tests_skippable: number;
+}

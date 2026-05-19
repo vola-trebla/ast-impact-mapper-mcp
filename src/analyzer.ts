@@ -1,4 +1,4 @@
-import { Project } from 'ts-morph';
+import { Project, SyntaxKind } from 'ts-morph';
 import path from 'path';
 import { existsSync } from 'fs';
 import { execSync } from 'child_process';
@@ -11,6 +11,7 @@ import {
   RenameAwareDiffResult,
   UnreachableModulesResult,
   ArchitecturalCyclesResult,
+  DifferentiateTypeImpactResult,
 } from './types.js';
 
 const projectCache = new Map<string, Project>();
@@ -441,6 +442,101 @@ export function detectArchitecturalCycles(projectRoot: string): ArchitecturalCyc
 
   const filesInCycles = [...new Set(cycles.flatMap((c) => c.chain))].sort();
   return { cycles, total_cycles: cycles.length, files_in_cycles: filesInCycles };
+}
+
+const TYPE_ONLY_KINDS = new Set([
+  SyntaxKind.InterfaceDeclaration,
+  SyntaxKind.TypeAliasDeclaration,
+  SyntaxKind.ImportDeclaration,
+]);
+
+function isTypeOnlyFile(projectRoot: string, filePath: string): boolean {
+  const sf = getProject(projectRoot).getSourceFile(filePath);
+  if (!sf) return false;
+  for (const stmt of sf.getStatements()) {
+    const kind = stmt.getKind();
+    if (TYPE_ONLY_KINDS.has(kind)) continue;
+    if (kind === SyntaxKind.ExportDeclaration) {
+      const ed = stmt.asKind(SyntaxKind.ExportDeclaration);
+      if (ed?.isTypeOnly()) continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+function importsViaTypeOnly(
+  projectRoot: string,
+  importerPath: string,
+  importedPath: string
+): boolean {
+  const sf = getProject(projectRoot).getSourceFile(importerPath);
+  if (!sf) return false;
+  return sf.getImportDeclarations().some((decl) => {
+    const resolved = decl.getModuleSpecifierSourceFile();
+    return resolved?.getFilePath() === importedPath && decl.isTypeOnly();
+  });
+}
+
+export function differentiateTypeImpact(
+  projectRoot: string,
+  changedFiles: string[]
+): DifferentiateTypeImpactResult {
+  const { reverse } = getGraphs(projectRoot);
+  const normalized = changedFiles.map((f) => normalize(f, projectRoot));
+
+  const mustRunSet = new Set<string>();
+  const skippableSet = new Set<string>();
+  const fileResults: DifferentiateTypeImpactResult['files'] = [];
+
+  for (const file of normalized) {
+    const typeOnly = isTypeOnlyFile(projectRoot, file);
+
+    // BFS: all transitively affected tests
+    const visited = new Set<string>([file]);
+    const queue = [file];
+    let i = 0;
+    while (i < queue.length) {
+      const cur = queue[i++];
+      for (const dep of reverse.get(cur) ?? []) {
+        if (!visited.has(dep)) {
+          visited.add(dep);
+          queue.push(dep);
+        }
+      }
+    }
+    const affectedTests = [...visited].filter((f) => isTestFile(f) && f !== file);
+
+    const mustRun: string[] = [];
+    const skippable: string[] = [];
+
+    for (const test of affectedTests) {
+      if (typeOnly || importsViaTypeOnly(projectRoot, test, file)) {
+        skippable.push(test);
+        skippableSet.add(test);
+      } else {
+        mustRun.push(test);
+        mustRunSet.add(test);
+      }
+    }
+
+    fileResults.push({
+      file,
+      runtime_impact: !typeOnly,
+      reason: typeOnly ? 'type_only_change' : 'runtime_logic_changed',
+      affected_tests_must_run: mustRun,
+      affected_tests_skippable: skippable,
+    });
+  }
+
+  // A test in must_run for any file overrides its skippable status
+  for (const t of mustRunSet) skippableSet.delete(t);
+
+  return {
+    files: fileResults,
+    total_tests_must_run: mustRunSet.size,
+    total_tests_skippable: skippableSet.size,
+  };
 }
 
 export function getTestSummary(projectRoot: string): TestSummary {
