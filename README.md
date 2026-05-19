@@ -15,14 +15,27 @@ This server builds a precise dependency graph from your TypeScript project and a
 
 ## 🛠️ Tools
 
-| Tool                   | Arguments                                       | What it returns                                                       |
-| ---------------------- | ----------------------------------------------- | --------------------------------------------------------------------- |
-| `get_affected_tests`   | `project_root`, `changed_files[]` or `git_diff` | Test files that transitively import any of the changed files          |
-| `get_dependency_graph` | `project_root`, `file_path`                     | Direct imports and importers for a specific file                      |
-| `explain_impact`       | `project_root`, `changed_file`, `test_file`     | Step-by-step import chain from a test file to the changed source file |
-| `get_coverage_gaps`    | `project_root`, `source_dirs[]?`, `limit?`      | Source files not reachable from any test — completely untested code   |
-| `get_test_summary`     | `project_root`                                  | Coverage rate, most-imported files, deepest import chains             |
-| `refresh_project`      | `project_root`                                  | Clears the cached AST — use after git pull or branch switch           |
+### Impact analysis
+
+| Tool                           | Arguments                                               | What it returns                                                                          |
+| ------------------------------ | ------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `get_affected_tests`           | `project_root`, `changed_files[]` or `git_diff`         | Test files that transitively import any of the changed files                             |
+| `get_affected_tests_by_branch` | `project_root`, `base_branch?`                          | Same as above but runs `git diff` internally                                             |
+| `get_rename_aware_diff`        | `project_root`, `base_branch?`, `similarity_threshold?` | Like above but handles file moves/renames and skips whitespace-only changes              |
+| `differentiate_type_impact`    | `project_root`, `changed_files[]`                       | Splits affected tests into must-run vs skippable (type-only changes emit no JS)          |
+| `analyze_api_surface_mutation` | `project_root`, `file_path`                             | Compares exported signatures against HEAD — `breaking_api_change` or `internal_refactor` |
+| `explain_impact`               | `project_root`, `changed_file`, `test_file`             | Step-by-step import chain from a test file to the changed source file                    |
+
+### Code health
+
+| Tool                           | Arguments                                   | What it returns                                                     |
+| ------------------------------ | ------------------------------------------- | ------------------------------------------------------------------- |
+| `identify_unreachable_modules` | `project_root`, `entry_points[]?`, `limit?` | Source files with zero incoming imports — dead code candidates      |
+| `detect_architectural_cycles`  | `project_root`                              | Circular import chains — `[A → B → C → A]` with `severity: warning` |
+| `get_dependency_graph`         | `project_root`, `file_path`, `format?`      | Direct imports and importers for a specific file (json or mermaid)  |
+| `get_coverage_gaps`            | `project_root`, `source_dirs[]?`, `limit?`  | Source files not reachable from any test — completely untested code |
+| `get_test_summary`             | `project_root`                              | Coverage rate, most-imported files, deepest import chains           |
+| `refresh_project`              | `project_root`                              | Clears the cached AST — use after git pull or branch switch         |
 
 ## 🚀 Setup
 
@@ -67,11 +80,12 @@ My project root is /my-project. I just changed these files from git diff:
   src/utils/auth.ts
   src/api/userService.ts
 
-1. get_affected_tests — which tests do I need to run?
-2. get_dependency_graph for src/utils/auth.ts — what else depends on it?
-3. explain_impact — why does tests/login.spec.ts care about auth.ts?
-4. get_coverage_gaps — which source files have zero test coverage?
-5. get_test_summary — what's the overall health of our test suite?
+1. get_rename_aware_diff — which tests are affected by this branch (handles renames)?
+2. differentiate_type_impact — which of those tests can I skip if the change is type-only?
+3. analyze_api_surface_mutation for src/utils/auth.ts — is this a breaking API change?
+4. explain_impact — why does tests/login.spec.ts care about auth.ts?
+5. detect_architectural_cycles — are there any circular deps I should break first?
+6. identify_unreachable_modules — which files are dead code I can safely delete?
 ```
 
 ## 📊 Example output
