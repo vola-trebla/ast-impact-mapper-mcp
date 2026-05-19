@@ -37,3 +37,10 @@ export interface RenameAwareDiffResult extends AffectedTestsResult {
   base_branch: string;
   renamed_files: Array<{ from: string; to: string; similarity: number }>;
 }
+
+export interface UnreachableModulesResult {
+  unreachable_files: string[];
+  entry_points_detected: string[];
+  total_source_files: number;
+  total_unreachable: number;
+}
