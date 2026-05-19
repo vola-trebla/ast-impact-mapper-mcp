@@ -7,6 +7,7 @@ import {
   getAffectedTestsByBranch,
   getAffectedTestsByBranchRenameAware,
   identifyUnreachableModules,
+  detectArchitecturalCycles,
   getDependencyGraph,
   explainImpact,
   getCoverageGaps,
@@ -245,6 +246,25 @@ server.registerTool(
         entryPoints: entry_points,
         limit,
       });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+);
+
+server.registerTool(
+  'detect_architectural_cycles',
+  {
+    description:
+      'Detects circular import dependencies — A imports B which imports C which imports A. ' +
+      'Cycles cause unpredictable module initialization order and indicate tight coupling. ' +
+      'Use to answer: are there circular dependencies I need to break before refactoring?',
+    inputSchema: projectSchema,
+  },
+  async ({ project_root }) => {
+    try {
+      const result = detectArchitecturalCycles(project_root);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (err) {
       return errorResponse(err);

@@ -10,6 +10,7 @@ import {
   TestSummary,
   RenameAwareDiffResult,
   UnreachableModulesResult,
+  ArchitecturalCyclesResult,
 } from './types.js';
 
 const projectCache = new Map<string, Project>();
@@ -392,6 +393,54 @@ export function identifyUnreachableModules(
     total_source_files: sourceFiles.length,
     total_unreachable: unreachableFiles.length,
   };
+}
+
+function normalizeCycle(chain: string[]): string[] {
+  const minIdx = chain.reduce((minI, _, i, arr) => (arr[i] < arr[minI] ? i : minI), 0);
+  return [...chain.slice(minIdx), ...chain.slice(0, minIdx)];
+}
+
+export function detectArchitecturalCycles(projectRoot: string): ArchitecturalCyclesResult {
+  const { forward } = getGraphs(projectRoot);
+
+  const cycles: ArchitecturalCyclesResult['cycles'] = [];
+  const seenCycles = new Set<string>();
+  // 0 = white (unvisited), 1 = gray (in current path), 2 = black (done)
+  const color = new Map<string, 0 | 1 | 2>();
+
+  function dfs(node: string, pathStack: string[]): void {
+    color.set(node, 1);
+    pathStack.push(node);
+
+    for (const neighbor of forward.get(node) ?? []) {
+      if (neighbor.includes('/node_modules/')) continue;
+      if (!neighbor.startsWith(projectRoot)) continue;
+
+      const c = color.get(neighbor) ?? 0;
+      if (c === 1) {
+        const chain = normalizeCycle(pathStack.slice(pathStack.indexOf(neighbor)));
+        const key = chain.join('|');
+        if (!seenCycles.has(key)) {
+          seenCycles.add(key);
+          cycles.push({ chain, severity: 'warning' });
+        }
+      } else if (c === 0) {
+        dfs(neighbor, pathStack);
+      }
+    }
+
+    pathStack.pop();
+    color.set(node, 2);
+  }
+
+  for (const node of forward.keys()) {
+    if (node.includes('/node_modules/')) continue;
+    if (!node.startsWith(projectRoot)) continue;
+    if ((color.get(node) ?? 0) === 0) dfs(node, []);
+  }
+
+  const filesInCycles = [...new Set(cycles.flatMap((c) => c.chain))].sort();
+  return { cycles, total_cycles: cycles.length, files_in_cycles: filesInCycles };
 }
 
 export function getTestSummary(projectRoot: string): TestSummary {
