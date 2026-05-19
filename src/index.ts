@@ -20,7 +20,7 @@ import {
 
 const server = new McpServer({
   name: 'ast-impact-mapper',
-  version: '0.1.0',
+  version: '0.2.0',
 });
 
 const projectSchema = z.object({
