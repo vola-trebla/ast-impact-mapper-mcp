@@ -44,3 +44,14 @@ export interface UnreachableModulesResult {
   total_source_files: number;
   total_unreachable: number;
 }
+
+export interface CycleResult {
+  chain: string[];
+  severity: 'warning';
+}
+
+export interface ArchitecturalCyclesResult {
+  cycles: CycleResult[];
+  total_cycles: number;
+  files_in_cycles: string[];
+}
