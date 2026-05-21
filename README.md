@@ -1,4 +1,4 @@
-# 🗺️ ast-impact-mapper-mcp 🐸✨
+# 🗺️ ast-impact-mapper-mcp ✨
 
 [![npm version](https://img.shields.io/npm/v/ast-impact-mapper-mcp.svg)](https://www.npmjs.com/package/ast-impact-mapper-mcp)
 [![npm downloads](https://img.shields.io/npm/dm/ast-impact-mapper-mcp.svg)](https://www.npmjs.com/package/ast-impact-mapper-mcp)
@@ -19,7 +19,7 @@ Guessing affected tests based on matching filenames (e.g. `auth.ts` -> `auth.tes
 
 ---
 
-## 💡 Quick Showcase (Real-World e2e Flow) 🐸
+## 💡 Quick Showcase (Real-World e2e Flow)
 
 Imagine your AI agent modifies a shared helper: `src/utils/auth.ts`. Instead of blindly running all tests or guessing by name, the agent uses this MCP server:
 
