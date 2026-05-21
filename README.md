@@ -19,6 +19,68 @@ Guessing affected tests based on matching filenames (e.g. `auth.ts` -> `auth.tes
 
 ---
 
+## 💡 Quick Showcase (Real-World e2e Flow) 🐸
+
+Imagine your AI agent modifies a shared helper: `src/utils/auth.ts`. Instead of blindly running all tests or guessing by name, the agent uses this MCP server:
+
+### 1. Identify Affected Tests
+
+The agent calls `get_affected_tests` with the changed file:
+
+```json
+// Tool Call: get_affected_tests({ changed_files: ["src/utils/auth.ts"] })
+{
+  "changed_files": ["/project/src/utils/auth.ts"],
+  "affected_tests": ["/project/tests/checkout.spec.ts"],
+  "total_affected": 1
+}
+```
+
+### 2. Explain the Connection
+
+To understand why `checkout.spec.ts` depends on `auth.ts`, the agent calls `explain_impact`:
+
+```json
+// Tool Call: explain_impact({ changed_file: "src/utils/auth.ts", test_file: "tests/checkout.spec.ts" })
+{
+  "found": true,
+  "import_chain": [
+    "/project/tests/checkout.spec.ts",
+    "/project/src/fixtures/user-fixture.ts",
+    "/project/src/utils/auth.ts"
+  ]
+}
+```
+
+_Aha! The checkout spec imports the user-fixture, which imports auth!_
+
+### 3. Check for Runtime Impact
+
+If the change in `auth.ts` was only adding a TypeScript interface (type-only change), calling `differentiate_type_impact` tells the agent:
+
+```json
+{
+  "files": [{ "file": "/project/src/utils/auth.ts", "runtime_impact": false }],
+  "total_tests_must_run": 0,
+  "total_tests_skippable": 1
+}
+```
+
+_Success! Since it is a type-only change, the agent can skip running tests entirely, saving precious CPU cycles and time._
+
+### 4. Run Minimal Tests
+
+If it _does_ contain runtime changes, the agent requests the execution command:
+
+```json
+// Tool Call: generate_test_command({ changed_files: ["src/utils/auth.ts"], runner: "vitest" })
+{
+  "command": "npx vitest run tests/checkout.spec.ts"
+}
+```
+
+---
+
 ## 🛠️ MCP Tools Reference
 
 All tools are configured with consistent, type-safe schemas (arguments in `snake_case`).
