@@ -1,173 +1,217 @@
-# 🗺️ ast-impact-mapper-mcp
+# 🗺️ ast-impact-mapper-mcp 🐸✨
 
 [![npm version](https://img.shields.io/npm/v/ast-impact-mapper-mcp.svg)](https://www.npmjs.com/package/ast-impact-mapper-mcp)
 [![npm downloads](https://img.shields.io/npm/dm/ast-impact-mapper-mcp.svg)](https://www.npmjs.com/package/ast-impact-mapper-mcp)
 [![CI](https://github.com/vola-trebla/ast-impact-mapper-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/vola-trebla/ast-impact-mapper-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-An MCP server that uses the TypeScript AST to determine exactly which tests are affected by a code change — so your AI agent stops running the entire suite and starts running only what matters.
+> **"Stop boiling the ocean. Run only the tests that actually care about your changes."** 🐸
 
-## 🤔 The Problem
+`ast-impact-mapper-mcp` is an advanced Model Context Protocol (MCP) server that analyzes your TypeScript/JavaScript codebase using AST parsing (`ts-morph`) and dependency graph tracing. It helps AI agents (like Claude or Cursor) target only the relevant tests, find dead code, identify circular import dependencies, and trace API mutations.
 
-When you change `src/utils/auth.ts`, which tests should run? Most tools either run everything (slow) or guess by filename (wrong). Import graphs don't lie — if a test transitively imports the changed file, it needs to run.
+---
 
-This server builds a precise dependency graph from your TypeScript project and answers that question in milliseconds.
+## 🧐 Why import graphs?
 
-## 🛠️ Tools
+Guessing affected tests based on matching filenames (e.g. `auth.ts` -> `auth.test.ts`) is highly inaccurate. Running the entire test suite on every minor change is extremely slow.
 
-### Impact analysis
+**Import graphs do not lie.** If a test file transitively imports a modified source file, it must be run. `ast-impact-mapper-mcp` builds a bidirectional file dependency graph and answers "which tests should I run?" in milliseconds.
 
-| Tool                           | Arguments                                               | What it returns                                                                          |
-| ------------------------------ | ------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `get_affected_tests`           | `project_root`, `changed_files[]` or `git_diff`         | Test files that transitively import any of the changed files                             |
-| `get_affected_tests_by_branch` | `project_root`, `base_branch?`                          | Same as above but runs `git diff` internally                                             |
-| `get_rename_aware_diff`        | `project_root`, `base_branch?`, `similarity_threshold?` | Like above but handles file moves/renames and skips whitespace-only changes              |
-| `differentiate_type_impact`    | `project_root`, `changed_files[]`                       | Splits affected tests into must-run vs skippable (type-only changes emit no JS)          |
-| `analyze_api_surface_mutation` | `project_root`, `file_path`                             | Compares exported signatures against HEAD — `breaking_api_change` or `internal_refactor` |
-| `explain_impact`               | `project_root`, `changed_file`, `test_file`             | Step-by-step import chain from a test file to the changed source file                    |
+---
 
-### Code health
+## 🛠️ MCP Tools Reference
 
-| Tool                           | Arguments                                   | What it returns                                                     |
-| ------------------------------ | ------------------------------------------- | ------------------------------------------------------------------- |
-| `identify_unreachable_modules` | `project_root`, `entry_points[]?`, `limit?` | Source files with zero incoming imports — dead code candidates      |
-| `detect_architectural_cycles`  | `project_root`                              | Circular import chains — `[A → B → C → A]` with `severity: warning` |
-| `get_dependency_graph`         | `project_root`, `file_path`, `format?`      | Direct imports and importers for a specific file (json or mermaid)  |
-| `get_coverage_gaps`            | `project_root`, `source_dirs[]?`, `limit?`  | Source files not reachable from any test — completely untested code |
-| `get_test_summary`             | `project_root`                              | Coverage rate, most-imported files, deepest import chains           |
-| `refresh_project`              | `project_root`                              | Clears the cached AST — use after git pull or branch switch         |
+All tools are configured with consistent, type-safe schemas (arguments in `snake_case`).
 
-## 🚀 Setup
+### 1. Impact Mapping & Tracing
 
-### 1. Install
+- #### `get_affected_tests`
+
+  Finds all test files transitively importing changed source files.
+  - **Arguments:**
+    - `project_root` (string, required): Absolute path to the TypeScript project.
+    - `changed_files` (string[], optional): Modified file paths.
+    - `git_diff` (string, optional): Raw stdout of `git diff --name-only`.
+  - **Returns:** Detailed map of changed files, affected tests, and totals.
+
+- #### `get_affected_tests_by_branch`
+
+  Automatically diffs the current state against a base branch using git to find affected tests.
+  - **Arguments:**
+    - `project_root` (string, required)
+    - `base_branch` (string, default: `"main"`): Branch to compare against.
+
+- #### `get_rename_aware_diff`
+
+  Highly robust branch impact analysis that tracks file moves/renames (via `git diff -M`) and ignores formatting/whitespace changes.
+  - **Arguments:**
+    - `project_root` (string, required)
+    - `base_branch` (string, default: `"main"`)
+    - `similarity_threshold` (number, default: `90`): % similarity threshold to declare a move.
+
+- #### `explain_impact`
+
+  Traces and explains the exact chain of imports showing why a changed source file affects a specific test.
+  - **Arguments:**
+    - `project_root` (string, required)
+    - `changed_file` (string, required)
+    - `test_file` (string, required)
+
+- #### `generate_test_command`
+  Constructs CLI commands for test runners (`vitest`, `jest`, or `playwright`) matching the affected tests subset.
+  - **Arguments:**
+    - `project_root` (string, required)
+    - `changed_files` (string[], required)
+    - `runner` (enum: `jest`, `vitest`, `playwright`, default: `vitest`)
+
+---
+
+### 2. TypeScript-specific Deep Code Analysis
+
+- #### `differentiate_type_impact`
+
+  Inspects imports and types to isolate type-only changes (interfaces, types, or `import type` exports). Helps skip test execution entirely if the changes do not impact the runtime bundle!
+  - **Arguments:**
+    - `project_root` (string, required)
+    - `changed_files` (string[], required)
+
+- #### `analyze_api_surface_mutation`
+
+  Compares a file against its `HEAD` version and determines if it modifies the public API (`breaking_api_change`) or only contains internal implementation edits (`internal_refactor`).
+  - **Arguments:**
+    - `project_root` (string, required)
+    - `file_path` (string, required)
+
+- #### `generate_skeleton_view`
+
+  Generates a token-optimized skeleton of a file by stripping out function and method bodies, keeping only signatures, JSDocs, and line numbers.
+  - **Arguments:**
+    - `project_root` (string, required)
+    - `file_path` (string, required)
+    - `include_jsdoc` (boolean, default: `true`)
+    - `include_private_members` (boolean, default: `false`)
+
+- #### `get_symbol_dependency_graph`
+  Traces declaration-level dependencies (functions, classes, variables) across files, finding internal declarations usage.
+  - **Arguments:**
+    - `project_root` (string, required)
+    - `file_path` (string, required)
+    - `symbol_name` (string, optional): Specific export symbol to map.
+    - `direction` (enum: `forward`, `reverse`, `bidirectional`, default: `bidirectional`)
+
+---
+
+### 3. Codebase Health & Graph Insights
+
+- #### `identify_unreachable_modules`
+
+  Finds orphaned source files that have zero incoming imports (dead code safe to prune). Automatically respects standard entry points.
+  - **Arguments:**
+    - `project_root` (string, required)
+    - `entry_points` (string[], optional): Explicit entry-points to exclude from warning.
+    - `limit` (number, default: `50`)
+
+- #### `detect_architectural_cycles`
+
+  Locates circular dependency loops (e.g. `A → B → C → A`) which cause unpredictable module initialization orders.
+  - **Arguments:**
+    - `project_root` (string, required)
+
+- #### `get_dependency_graph`
+
+  Returns direct imports/importers of a file in JSON format or as a visual **Mermaid TD flowchart**.
+  - **Arguments:**
+    - `project_root` (string, required)
+    - `file_path` (string, required)
+    - `format` (enum: `json`, `mermaid`, default: `json`)
+
+- #### `get_coverage_gaps`
+
+  Identifies files with zero import coverage — those that are never imported by any test file.
+  - **Arguments:**
+    - `project_root` (string, required)
+    - `source_dirs` (string[], optional)
+    - `limit` (number, default: `50`)
+
+- #### `get_test_summary`
+
+  Provides a high-level view of test coverage rate, deepest import chains, and high-risk most-imported modules.
+  - **Arguments:**
+    - `project_root` (string, required)
+
+- #### `refresh_project`
+  Invalidates AST and dependency graphs cache. Run this after checking out branches or pulling remote git updates.
+  - **Arguments:**
+    - `project_root` (string, required)
+
+---
+
+## 🚀 Installation & Setup
+
+### 1. Global Installation
 
 ```bash
 npm install -g ast-impact-mapper-mcp
 ```
 
-Or build from source:
+### 2. Configure Editor / Agent Client
 
-```bash
-git clone https://github.com/vola-trebla/ast-impact-mapper-mcp.git
-cd ast-impact-mapper-mcp
-npm install && npm run build
-```
+#### VS Code / Cursor
 
-### 2. Add the MCP server to your editor
-
-#### Cursor / VS Code (`.cursor/mcp.json` or `.vscode/mcp.json`)
+Add the following to your `.cursor/mcp.json` or `.vscode/mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "ast-impact-mapper": {
-      "command": "ast-impact-mapper-mcp"
+      "command": "npx",
+      "args": ["-y", "ast-impact-mapper-mcp"]
     }
   }
 }
 ```
 
-#### Claude Code
+#### Claude Code CLI
 
 ```bash
-claude mcp add ast-impact-mapper ast-impact-mapper-mcp
+claude mcp add ast-impact-mapper npx -- -y ast-impact-mapper-mcp
 ```
 
-## 💬 Example usage
+---
 
-```
-My project root is /my-project. I just changed these files from git diff:
-  src/utils/auth.ts
-  src/api/userService.ts
+## 💬 Example Scenario
 
-1. get_rename_aware_diff — which tests are affected by this branch (handles renames)?
-2. differentiate_type_impact — which of those tests can I skip if the change is type-only?
-3. analyze_api_surface_mutation for src/utils/auth.ts — is this a breaking API change?
-4. explain_impact — why does tests/login.spec.ts care about auth.ts?
-5. detect_architectural_cycles — are there any circular deps I should break first?
-6. identify_unreachable_modules — which files are dead code I can safely delete?
-```
+Imagine you modify a shared page component: `src/pages/login-page.ts`.
 
-## 📊 Example output
+1. **AI Agent runs `get_rename_aware_diff`**:
+   It detects that only `tests/auth.spec.ts` imports the page object transitively.
+2. **AI Agent runs `differentiate_type_impact`**:
+   It sees you only added a type definition interface, classifying it as `type_only_change` -> it skips running the test execution completely, saving developer cycles!
+3. **AI Agent runs `explain_impact`**:
+   If asked why `tests/auth.spec.ts` depends on it, it renders the path:
+   `tests/auth.spec.ts` → `src/fixtures/app.ts` → `src/pages/login-page.ts`.
 
-Given a project with this structure:
+---
 
-```
-src/
-  fixtures/base-fixture.ts   ← imports home-page + results-page
-  pages/google-home-page.ts
-  pages/google-results-page.ts
-tests/
-  google-pom.spec.ts         ← imports base-fixture
-```
+## 🔗 The Ecosystem
 
-**`get_affected_tests`** — change `google-home-page.ts`, find affected tests:
+- **`ast-impact-mapper-mcp`** answers: _"Which tests are affected by my changes?"_ 🗺️
+- **[`flakiness-graph-mcp`](https://github.com/vola-trebla/flakiness-graph-mcp)** answers: _"Of those affected tests, which ones are historically unstable?"_ 📊
+- Together, they form a perfect feedback loop for running a prioritized, resilient, and minimal test suite.
 
-```json
-{
-  "changed_files": ["/my-project/src/pages/google-home-page.ts"],
-  "affected_tests": ["/my-project/tests/google-pom.spec.ts"],
-  "total_affected": 1
-}
-```
+---
 
-**`explain_impact`** — why does the spec depend on `google-home-page.ts`?
-
-```json
-{
-  "changed_file": "/my-project/src/pages/google-home-page.ts",
-  "test_file": "/my-project/tests/google-pom.spec.ts",
-  "found": true,
-  "import_chain": [
-    "/my-project/tests/google-pom.spec.ts",
-    "/my-project/src/fixtures/base-fixture.ts",
-    "/my-project/src/pages/google-home-page.ts"
-  ]
-}
-```
-
-**`get_test_summary`** — project-wide health:
-
-```json
-{
-  "total_source_files": 4,
-  "total_test_files": 1,
-  "covered_source_files": 3,
-  "coverage_rate": 0.75,
-  "most_imported_files": [{ "file": "src/fixtures/base-fixture.ts", "imported_by_count": 1 }],
-  "deepest_import_chains": [{ "test": "tests/google-pom.spec.ts", "depth": 2 }]
-}
-```
-
-## 🧠 How it works
-
-The server uses [`ts-morph`](https://ts-morph.com/) to load your TypeScript project (with full tsconfig support, including path aliases) and builds two graphs:
-
-- **Forward graph**: file → files it imports
-- **Reverse graph**: file → files that import it
-
-`get_affected_tests` does a BFS through the reverse graph starting from the changed files, collecting every file that transitively depends on them, then filters to `*.spec.ts` / `*.test.ts`.
-
-`explain_impact` does a BFS through the forward graph from the test file until it reaches the changed file, then reconstructs the shortest import path.
-
-The project is cached in memory per `project_root` — the first call parses the AST, subsequent calls reuse it.
-
-## 🔗 Works great with flakiness-knowledge-graph-mcp
-
-- **ast-impact-mapper-mcp** answers "which tests are affected by this change?"
-- **[flakiness-knowledge-graph-mcp](https://github.com/vola-trebla/flakiness-knowledge-graph-mcp)** answers "of those tests, which ones are historically unreliable?"
-
-Together, an AI agent can give you a prioritized, minimal test run: the right tests, ranked by flakiness risk.
-
-## 📋 Scripts
+## 🛠️ CLI Development
 
 ```bash
-npm run build        # compile TypeScript → dist/
-npm run lint         # ESLint
-npm run format       # Prettier --write
-npm run format:check # Prettier check (used in CI)
+npm run build        # Compile TypeScript to dist/
+npm run lint         # Run ESLint validation
+npm run format       # Format files via Prettier
+npm test             # Run unit tests via Vitest
 ```
+
+---
 
 ## 📄 License
 
-MIT
+MIT © vola-trebla 🐸
