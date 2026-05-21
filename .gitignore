@@ -1,3 +1,5 @@
 node_modules/
 dist/
 v2_roadmap.md
+.ast-mapper-cache/
+

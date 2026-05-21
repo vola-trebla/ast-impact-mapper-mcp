@@ -1,7 +1,8 @@
-import { Project, SyntaxKind } from 'ts-morph';
+import { Project, SyntaxKind, Node, SourceFile } from 'ts-morph';
 import path from 'path';
-import { existsSync } from 'fs';
+import fs, { existsSync } from 'fs';
 import { execSync } from 'child_process';
+import crypto from 'crypto';
 import {
   AffectedTestsResult,
   FileDependencies,
@@ -16,13 +17,109 @@ import {
   ApiSurfaceMutationResult,
 } from './types.js';
 
+interface CacheEntry {
+  mtime: number;
+  hash: string;
+  imports: string[];
+}
+
+interface CacheData {
+  version: string;
+  files: Record<string, CacheEntry>;
+}
+
+function getCachePath(projectRoot: string): string {
+  return path.join(projectRoot, '.ast-mapper-cache', 'cache.json');
+}
+
+function loadCache(projectRoot: string): CacheData {
+  const cachePath = getCachePath(projectRoot);
+  if (existsSync(cachePath)) {
+    try {
+      const content = fs.readFileSync(cachePath, 'utf8');
+      return JSON.parse(content);
+    } catch {
+      // Ignore reading errors
+    }
+  }
+  return { version: '1', files: {} };
+}
+
+function saveCache(projectRoot: string, cache: CacheData): void {
+  const cachePath = getCachePath(projectRoot);
+  const cacheDir = path.dirname(cachePath);
+  if (!existsSync(cacheDir)) {
+    fs.mkdirSync(cacheDir, { recursive: true });
+  }
+  fs.writeFileSync(cachePath, JSON.stringify(cache, null, 2), 'utf8');
+}
+
+function computeMd5(filePath: string): string {
+  try {
+    const data = fs.readFileSync(filePath);
+    return crypto.createHash('md5').update(data).digest('hex');
+  } catch {
+    return '';
+  }
+}
+
+function globFiles(dir: string, projectRoot: string): string[] {
+  const results: string[] = [];
+  let list: string[];
+  try {
+    list = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  for (const file of list) {
+    const filePath = path.join(dir, file);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      continue;
+    }
+    if (stat && stat.isDirectory()) {
+      if (
+        file === 'node_modules' ||
+        file === '.git' ||
+        file === 'dist' ||
+        file === '.ast-mapper-cache' ||
+        file === 'build' ||
+        file === 'out'
+      ) {
+        continue;
+      }
+      results.push(...globFiles(filePath, projectRoot));
+    } else {
+      if (/\.(ts|tsx|js|jsx)$/.test(file) && !file.endsWith('.d.ts')) {
+        results.push(filePath);
+      }
+    }
+  }
+  return results;
+}
+
+export function getOrAddSourceFile(project: Project, filePath: string): SourceFile | undefined {
+  let sf = project.getSourceFile(filePath);
+  if (!sf) {
+    try {
+      sf = project.addSourceFileAtPath(filePath);
+      project.resolveSourceFileDependencies();
+    } catch {
+      // Ignore
+    }
+  }
+  return sf;
+}
+
 const projectCache = new Map<string, Project>();
 const graphCache = new Map<
   string,
   { forward: Map<string, Set<string>>; reverse: Map<string, Set<string>> }
 >();
 
-function getProject(projectRoot: string): Project {
+function getProject(projectRoot: string, lazy = true): Project {
   const cached = projectCache.get(projectRoot);
   if (cached) return cached;
 
@@ -31,12 +128,12 @@ function getProject(projectRoot: string): Project {
   const project = existsSync(tsConfigPath)
     ? new Project({
         tsConfigFilePath: tsConfigPath,
-        skipAddingFilesFromTsConfig: false,
+        skipAddingFilesFromTsConfig: lazy,
         compilerOptions: { allowJs: true },
       })
     : new Project({ compilerOptions: { allowJs: true } });
 
-  if (!existsSync(tsConfigPath)) {
+  if (!existsSync(tsConfigPath) && !lazy) {
     project.addSourceFilesAtPaths(`${projectRoot}/**/*.{ts,tsx,js,jsx}`);
   }
 
@@ -44,30 +141,117 @@ function getProject(projectRoot: string): Project {
   return project;
 }
 
-function getGraphs(projectRoot: string): {
+export function getGraphs(projectRoot: string): {
   forward: Map<string, Set<string>>;
   reverse: Map<string, Set<string>>;
 } {
   const cached = graphCache.get(projectRoot);
   if (cached) return cached;
 
-  const project = getProject(projectRoot);
+  // 1. Load cache
+  const cacheData = loadCache(projectRoot);
+  const updatedFilesCache: Record<string, CacheEntry> = {};
+
+  // 2. Scan project files
+  const files = globFiles(projectRoot, projectRoot);
+
+  // 3. Find files to parse (hash changed or not in cache)
+  const filesToParse: string[] = [];
+  for (const file of files) {
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(file);
+    } catch {
+      continue;
+    }
+    const cachedEntry = cacheData.files[file];
+
+    if (cachedEntry && cachedEntry.mtime === stat.mtimeMs) {
+      updatedFilesCache[file] = cachedEntry;
+    } else {
+      const currentHash = computeMd5(file);
+      if (cachedEntry && cachedEntry.hash === currentHash) {
+        updatedFilesCache[file] = {
+          mtime: stat.mtimeMs,
+          hash: currentHash,
+          imports: cachedEntry.imports,
+        };
+      } else {
+        filesToParse.push(file);
+      }
+    }
+  }
+
+  // 4. Parse changed files on-demand
+  if (filesToParse.length > 0) {
+    const project = getProject(projectRoot, true); // lazy project
+
+    for (const file of filesToParse) {
+      try {
+        project.addSourceFileAtPath(file);
+      } catch {
+        // Ignore files that can't be added
+      }
+    }
+
+    try {
+      project.resolveSourceFileDependencies();
+    } catch {
+      // Ignore resolution errors
+    }
+
+    for (const file of filesToParse) {
+      try {
+        const sourceFile = project.getSourceFile(file);
+        const imports: string[] = [];
+        if (sourceFile) {
+          for (const decl of sourceFile.getImportDeclarations()) {
+            const resolved = decl.getModuleSpecifierSourceFile();
+            if (resolved) {
+              imports.push(resolved.getFilePath());
+            }
+          }
+        }
+
+        const stat = fs.statSync(file);
+        const hash = computeMd5(file);
+        updatedFilesCache[file] = {
+          mtime: stat.mtimeMs,
+          hash,
+          imports,
+        };
+      } catch {
+        try {
+          const stat = fs.statSync(file);
+          const hash = computeMd5(file);
+          updatedFilesCache[file] = {
+            mtime: stat.mtimeMs,
+            hash,
+            imports: [],
+          };
+        } catch {
+          // File was deleted during parse
+        }
+      }
+    }
+  }
+
+  // 5. Save updated cache
+  cacheData.files = updatedFilesCache;
+  saveCache(projectRoot, cacheData);
+
+  // 6. Build forward and reverse graphs
   const forward = new Map<string, Set<string>>();
   const reverse = new Map<string, Set<string>>();
 
-  for (const sourceFile of project.getSourceFiles()) {
-    const filePath = sourceFile.getFilePath();
-    if (!forward.has(filePath)) forward.set(filePath, new Set());
+  for (const [file, entry] of Object.entries(updatedFilesCache)) {
+    if (!forward.has(file)) forward.set(file, new Set());
 
-    for (const decl of sourceFile.getImportDeclarations()) {
-      const resolved = decl.getModuleSpecifierSourceFile();
-      if (!resolved) continue;
-      const resolvedPath = resolved.getFilePath();
+    for (const imp of entry.imports) {
+      forward.get(file)!.add(imp);
 
-      forward.get(filePath)!.add(resolvedPath);
-
-      if (!reverse.has(resolvedPath)) reverse.set(resolvedPath, new Set());
-      reverse.get(resolvedPath)!.add(filePath);
+      if (!reverse.has(imp)) reverse.set(imp, new Set());
+      reverse.get(imp)!.add(file);
     }
   }
 
@@ -453,7 +637,7 @@ const TYPE_ONLY_KINDS = new Set([
 ]);
 
 function isTypeOnlyFile(projectRoot: string, filePath: string): boolean {
-  const sf = getProject(projectRoot).getSourceFile(filePath);
+  const sf = getOrAddSourceFile(getProject(projectRoot, true), filePath);
   if (!sf) return false;
   for (const stmt of sf.getStatements()) {
     const kind = stmt.getKind();
@@ -472,7 +656,7 @@ function importsViaTypeOnly(
   importerPath: string,
   importedPath: string
 ): boolean {
-  const sf = getProject(projectRoot).getSourceFile(importerPath);
+  const sf = getOrAddSourceFile(getProject(projectRoot, true), importerPath);
   if (!sf) return false;
   return sf.getImportDeclarations().some((decl) => {
     const resolved = decl.getModuleSpecifierSourceFile();
@@ -637,8 +821,8 @@ export function analyzeApiSurfaceMutation(
     // new file — no HEAD version
   }
 
-  const project = getProject(projectRoot);
-  const newSf = project.getSourceFile(normalized);
+  const project = getProject(projectRoot, true);
+  const newSf = getOrAddSourceFile(project, normalized);
   if (!newSf) throw new Error(`File not found in project: ${normalized}`);
 
   const newSigs = extractSignatures(newSf);
@@ -784,4 +968,315 @@ export function getTestSummary(projectRoot: string): TestSummary {
     most_imported_files: mostImported,
     deepest_import_chains: deepestChains,
   };
+}
+
+export function getSymbolDependencyGraph(
+  projectRoot: string,
+  filePath: string,
+  symbolName?: string,
+  direction: 'forward' | 'reverse' | 'bidirectional' = 'bidirectional'
+): { nodes: SymbolNode[]; edges: SymbolEdge[] } {
+  const normalizedPath = normalize(filePath, projectRoot);
+  const project = getProject(projectRoot, true);
+  const sf = getOrAddSourceFile(project, normalizedPath);
+  if (!sf) {
+    throw new Error(`File not found: ${normalizedPath}`);
+  }
+
+  const nodes: SymbolNode[] = [];
+  const edges: SymbolEdge[] = [];
+  const visitedSymbols = new Set<string>();
+
+  function addNode(name: string, file: string, kind: string): string {
+    const id = `${file}#${name}`;
+    if (!visitedSymbols.has(id)) {
+      visitedSymbols.add(id);
+      nodes.push({ id, name, file: path.relative(projectRoot, file), kind });
+    }
+    return id;
+  }
+
+  const exportedDeclarations = sf.getExportedDeclarations();
+  const targetSymbols = symbolName ? [symbolName] : [...exportedDeclarations.keys()];
+  const { reverse: fileReverse } = getGraphs(projectRoot);
+
+  for (const sym of targetSymbols) {
+    const decls = exportedDeclarations.get(sym);
+    if (!decls) continue;
+
+    for (const decl of decls) {
+      let kind = 'unknown';
+      if (Node.isFunctionDeclaration(decl)) kind = 'function';
+      else if (Node.isClassDeclaration(decl)) kind = 'class';
+      else if (Node.isInterfaceDeclaration(decl)) kind = 'interface';
+      else if (Node.isTypeAliasDeclaration(decl)) kind = 'type';
+      else if (Node.isVariableDeclaration(decl)) kind = 'variable';
+
+      const sourceId = addNode(sym, normalizedPath, kind);
+
+      if (direction === 'reverse' || direction === 'bidirectional') {
+        const visitedFiles = new Set<string>([normalizedPath]);
+        const queue = [normalizedPath];
+        let qi = 0;
+        while (qi < queue.length) {
+          const cur = queue[qi++];
+          for (const dep of fileReverse.get(cur) ?? []) {
+            if (!visitedFiles.has(dep)) {
+              visitedFiles.add(dep);
+              queue.push(dep);
+            }
+          }
+        }
+
+        for (const file of visitedFiles) {
+          getOrAddSourceFile(project, file);
+        }
+
+        try {
+          if (Node.isReferenceFindable(decl)) {
+            const referencedSymbols = decl.findReferences();
+            for (const refSym of referencedSymbols) {
+              for (const ref of refSym.getReferences()) {
+                const refNode = ref.getNode();
+                const refFile = refNode.getSourceFile().getFilePath();
+                if (refFile === normalizedPath) continue;
+
+                let parentNode: Node | undefined = refNode.getParent();
+                let parentSymName = '';
+                let parentKind = 'unknown';
+
+                while (parentNode) {
+                  if (Node.isFunctionDeclaration(parentNode) && parentNode.getName()) {
+                    parentSymName = parentNode.getName()!;
+                    parentKind = 'function';
+                    break;
+                  } else if (Node.isMethodDeclaration(parentNode) && parentNode.getName()) {
+                    parentSymName = parentNode.getName()!;
+                    parentKind = 'method';
+                    break;
+                  } else if (Node.isClassDeclaration(parentNode) && parentNode.getName()) {
+                    parentSymName = parentNode.getName()!;
+                    parentKind = 'class';
+                    break;
+                  } else if (Node.isVariableDeclaration(parentNode)) {
+                    parentSymName = parentNode.getName();
+                    parentKind = 'variable';
+                    break;
+                  }
+                  parentNode = parentNode.getParent();
+                }
+
+                if (parentSymName) {
+                  const targetId = addNode(parentSymName, refFile, parentKind);
+                  edges.push({ from: targetId, to: sourceId });
+                }
+              }
+            }
+          }
+        } catch {
+          // Ignore
+        }
+      }
+
+      if (direction === 'forward' || direction === 'bidirectional') {
+        decl.forEachDescendant((child) => {
+          if (Node.isIdentifier(child)) {
+            try {
+              const definitions = child.getDefinitions();
+              for (const def of definitions) {
+                const defFile = def.getSourceFile()?.getFilePath();
+                if (!defFile || defFile === normalizedPath || defFile.includes('/node_modules/')) {
+                  continue;
+                }
+
+                const defName = def.getName();
+                const defKindName = def.getKind().toString();
+                const targetId = addNode(defName, defFile, defKindName);
+                edges.push({ from: sourceId, to: targetId });
+              }
+            } catch {
+              // Ignore
+            }
+          }
+        });
+      }
+    }
+  }
+
+  const seenEdges = new Set<string>();
+  const uniqueEdges = edges.filter((e) => {
+    const key = `${e.from}->${e.to}`;
+    if (seenEdges.has(key)) return false;
+    seenEdges.add(key);
+    return true;
+  });
+
+  return { nodes, edges: uniqueEdges };
+}
+
+export function generateSkeletonView(
+  projectRoot: string,
+  filePath: string,
+  includeJSDoc = true,
+  includePrivateMembers = false
+): string {
+  const normalizedPath = normalize(filePath, projectRoot);
+  const project = getProject(projectRoot, true);
+  const sf = getOrAddSourceFile(project, normalizedPath);
+  if (!sf) {
+    throw new Error(`File not found: ${normalizedPath}`);
+  }
+
+  const lines: string[] = [];
+  const totalLines = sf.getEndLineNumber();
+  const relativePath = path.relative(projectRoot, normalizedPath);
+  lines.push(`# File: ${relativePath} (Lines: 1-${totalLines})`);
+
+  function getJSDocText(node: Node): string {
+    if (includeJSDoc && Node.isJSDocable(node)) {
+      const docs = node.getJsDocs();
+      if (docs.length > 0) {
+        return docs.map((doc) => doc.getText()).join('\n') + '\n';
+      }
+    }
+    return '';
+  }
+
+  function formatLineRange(node: Node): string {
+    const start = node.getStartLineNumber();
+    const end = node.getEndLineNumber();
+    return ` L${start}-${end}`;
+  }
+
+  for (const statement of sf.getStatements()) {
+    if (Node.isImportDeclaration(statement)) {
+      lines.push(statement.getText());
+    } else if (Node.isInterfaceDeclaration(statement)) {
+      const jsdoc = getJSDocText(statement);
+      const start = statement.getStartLineNumber();
+      const end = statement.getEndLineNumber();
+      const name = statement.getName();
+      const extendsText = statement
+        .getExtends()
+        .map((e) => e.getText())
+        .join(', ');
+      const extendsPart = extendsText ? ` extends ${extendsText}` : '';
+      lines.push(`${jsdoc}export interface ${name}${extendsPart} L${start}-${end}`);
+    } else if (Node.isTypeAliasDeclaration(statement)) {
+      const jsdoc = getJSDocText(statement);
+      lines.push(
+        `${jsdoc}${statement.getText().replace(/\s+/g, ' ').trim()} L${statement.getStartLineNumber()}-${statement.getEndLineNumber()}`
+      );
+    } else if (Node.isFunctionDeclaration(statement)) {
+      const jsdoc = getJSDocText(statement);
+      const name = statement.getName() ?? '';
+      const params = statement
+        .getParameters()
+        .map((p) => p.getText())
+        .join(', ');
+      const returnType = statement.getReturnTypeNode()?.getText() ?? 'any';
+      const isExported = statement.isExported() ? 'export ' : '';
+      lines.push(
+        `${jsdoc}${isExported}function ${name}(${params}): ${returnType}${formatLineRange(statement)}`
+      );
+    } else if (Node.isClassDeclaration(statement)) {
+      const jsdoc = getJSDocText(statement);
+      const name = statement.getName() ?? '';
+      const isExported = statement.isExported() ? 'export ' : '';
+      lines.push(`${jsdoc}${isExported}class ${name}${formatLineRange(statement)} {`);
+
+      for (const member of statement.getMembers()) {
+        let isPrivate = false;
+        let modifiers = '';
+        if (Node.isModifierable(member)) {
+          isPrivate =
+            member.hasModifier(SyntaxKind.PrivateKeyword) ||
+            member.hasModifier(SyntaxKind.ProtectedKeyword);
+          modifiers = member
+            .getModifiers()
+            .map((m) => m.getText())
+            .join(' ');
+        }
+        if (isPrivate && !includePrivateMembers) continue;
+
+        const memberJSDoc = getJSDocText(member);
+        const modPrefix = modifiers ? modifiers + ' ' : '';
+
+        if (Node.isMethodDeclaration(member)) {
+          const mName = member.getName();
+          const params = member
+            .getParameters()
+            .map((p) => p.getText())
+            .join(', ');
+          const returnType = member.getReturnTypeNode()?.getText() ?? 'any';
+          lines.push(
+            `  ${memberJSDoc}${modPrefix}${mName}(${params}): ${returnType}${formatLineRange(member)}`
+          );
+        } else if (Node.isPropertyDeclaration(member)) {
+          const pName = member.getName();
+          const type = member.getTypeNode()?.getText() ?? 'any';
+          lines.push(`  ${memberJSDoc}${modPrefix}${pName}: ${type}${formatLineRange(member)}`);
+        } else if (Node.isConstructorDeclaration(member)) {
+          const params = member
+            .getParameters()
+            .map((p) => p.getText())
+            .join(', ');
+          lines.push(`  ${memberJSDoc}constructor(${params})${formatLineRange(member)}`);
+        }
+      }
+      lines.push(`}`);
+    } else if (Node.isVariableStatement(statement)) {
+      const jsdoc = getJSDocText(statement);
+      const isExported = statement.isExported() ? 'export ' : '';
+      const declarations = statement
+        .getDeclarations()
+        .map((d) => {
+          const name = d.getName();
+          const type = d.getTypeNode()?.getText() ?? 'any';
+          return `${name}: ${type}`;
+        })
+        .join(', ');
+      lines.push(`${jsdoc}${isExported}const/let ${declarations}${formatLineRange(statement)}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+export function generateTestCommand(
+  projectRoot: string,
+  changedFiles: string[],
+  runner: 'jest' | 'vitest' | 'playwright' = 'vitest'
+): { command: string } {
+  const result = getAffectedTests(projectRoot, changedFiles);
+  const testFiles = result.affected_tests;
+
+  if (testFiles.length === 0) {
+    return { command: '' };
+  }
+
+  const relativePaths = testFiles.map((f) => path.relative(projectRoot, f));
+
+  let command = '';
+  if (runner === 'vitest') {
+    command = `npx vitest run ${relativePaths.join(' ')}`;
+  } else if (runner === 'jest') {
+    command = `npx jest ${relativePaths.join(' ')}`;
+  } else if (runner === 'playwright') {
+    command = `npx playwright test ${relativePaths.join(' ')}`;
+  }
+
+  return { command };
+}
+
+interface SymbolNode {
+  id: string;
+  name: string;
+  file: string;
+  kind: string;
+}
+
+interface SymbolEdge {
+  from: string;
+  to: string;
 }
