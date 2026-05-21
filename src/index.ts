@@ -23,7 +23,7 @@ import {
 
 const server = new McpServer({
   name: 'ast-impact-mapper',
-  version: '0.3.0',
+  version: '0.3.1',
 });
 
 const projectSchema = z.object({
@@ -392,8 +392,8 @@ server.registerTool(
     description:
       'Retrieves a bidirectional or directed dependency graph mapped to individual declarations, functions, and variables.',
     inputSchema: projectSchema.extend({
-      filePath: z.string().describe('Absolute path to the TypeScript source file'),
-      symbolName: z
+      file_path: z.string().describe('Absolute path to the TypeScript source file'),
+      symbol_name: z
         .string()
         .optional()
         .describe('Target export symbol. If omitted, maps all symbols in the file'),
@@ -403,9 +403,9 @@ server.registerTool(
         .describe('Graph traversal direction'),
     }),
   },
-  async ({ project_root, filePath, symbolName, direction }) => {
+  async ({ project_root, file_path, symbol_name, direction }) => {
     try {
-      const result = getSymbolDependencyGraph(project_root, filePath, symbolName, direction);
+      const result = getSymbolDependencyGraph(project_root, file_path, symbol_name, direction);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (err) {
       return errorResponse(err);
@@ -419,21 +419,21 @@ server.registerTool(
     description:
       'Generates a token-optimized representation of a source file by stripping function and method bodies, keeping only JSDocs and declarations with line numbers.',
     inputSchema: projectSchema.extend({
-      filePath: z.string().describe('Absolute path to the target source file'),
-      includeJSDoc: z.boolean().default(true).describe('Whether to preserve JSDoc annotations'),
-      includePrivateMembers: z
+      file_path: z.string().describe('Absolute path to the target source file'),
+      include_jsdoc: z.boolean().default(true).describe('Whether to preserve JSDoc annotations'),
+      include_private_members: z
         .boolean()
         .default(false)
         .describe('Whether to list private/internal symbols'),
     }),
   },
-  async ({ project_root, filePath, includeJSDoc, includePrivateMembers }) => {
+  async ({ project_root, file_path, include_jsdoc, include_private_members }) => {
     try {
       const result = generateSkeletonView(
         project_root,
-        filePath,
-        includeJSDoc,
-        includePrivateMembers
+        file_path,
+        include_jsdoc,
+        include_private_members
       );
       return { content: [{ type: 'text', text: result }] };
     } catch (err) {
@@ -448,16 +448,16 @@ server.registerTool(
     description:
       'Outputs the optimal test execution command for Jest, Vitest, or Playwright based on changed files.',
     inputSchema: projectSchema.extend({
-      changedFiles: z.array(z.string()).describe('List of modified source file paths'),
+      changed_files: z.array(z.string()).describe('List of modified source file paths'),
       runner: z
         .enum(['jest', 'vitest', 'playwright'])
         .default('vitest')
         .describe('Test runner to target'),
     }),
   },
-  async ({ project_root, changedFiles, runner }) => {
+  async ({ project_root, changed_files, runner }) => {
     try {
-      const result = generateTestCommand(project_root, changedFiles, runner);
+      const result = generateTestCommand(project_root, changed_files, runner);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (err) {
       return errorResponse(err);
